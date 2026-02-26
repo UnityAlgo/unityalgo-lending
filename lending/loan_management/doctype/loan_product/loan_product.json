@@ -8,6 +8,7 @@
  "field_order": [
   "product_code",
   "product_name",
+  "minimum_loan_amount",
   "maximum_loan_amount",
   "rate_of_interest",
   "penalty_interest_method",
@@ -30,6 +31,13 @@
   "repayment_date_on",
   "days_past_due_threshold_for_npa",
   "description",
+  "section_break_kbge",
+  "repayment_method",
+  "total_payable_amount",
+  "column_break_ttri",
+  "repayment_amount",
+  "repayment_periods",
+  "total_payable_interest",
   "account_details_section",
   "mode_of_payment",
   "disbursement_account",
@@ -146,7 +154,7 @@
    "reqd": 1
   },
   {
-   "default": "0",
+   "default": "1",
    "fieldname": "is_term_loan",
    "fieldtype": "Check",
    "label": "Is Term Loan"
@@ -199,6 +207,7 @@
    "reqd": 1
   },
   {
+   "default": "Monthly as per repayment start date",
    "depends_on": "is_term_loan",
    "description": "The schedule type that will be used for generating the term loan schedules (will affect the payment date and monthly repayment amount)",
    "fieldname": "repayment_schedule_type",
@@ -454,6 +463,7 @@
    "collapsible": 1,
    "fieldname": "write_off_accounts_section",
    "fieldtype": "Section Break",
+   "hidden": 1,
    "label": "Write Off Accounts"
   },
   {
@@ -472,11 +482,63 @@
    "fieldtype": "Link",
    "label": "Write Off Recovery Account",
    "options": "Account"
+  },
+  {
+   "fieldname": "minimum_loan_amount",
+   "fieldtype": "Currency",
+   "label": "Minimum Loan Amount",
+   "non_negative": 1,
+   "options": "Company:company:default_currency"
+  },
+  {
+   "default": "Repay Over Number of Periods",
+   "fieldname": "repayment_method",
+   "fieldtype": "Select",
+   "label": "Repayment Method",
+   "options": "Repay Fixed Amount per Period\nRepay Over Number of Periods",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval: doc.repayment_method;",
+   "fieldname": "repayment_amount",
+   "fieldtype": "Currency",
+   "label": "Monthly Repayment Amount",
+   "read_only_depends_on": "eval: doc.repayment_method == \"Repay Over Number of Periods\";"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval: doc.repayment_method;",
+   "fieldname": "repayment_periods",
+   "fieldtype": "Int",
+   "label": "Repayment Period in Months",
+   "read_only_depends_on": "eval: doc.repayment_method == \"Repay Fixed Amount per Period\";"
+  },
+  {
+   "fieldname": "section_break_kbge",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "total_payable_amount",
+   "fieldtype": "Currency",
+   "label": "Total Payable Amount",
+   "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_ttri",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_payable_interest",
+   "fieldtype": "Currency",
+   "label": "Total Payable Interest",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2023-10-18 18:32:08.421781",
+ "modified": "2026-02-26 04:53:52.129818",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Product",
@@ -496,6 +558,8 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
+ "search_fields": "product_name",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],

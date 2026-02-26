@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-02-19 02:20:12.930392",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "guarantor",
+  "guarantor_name",
+  "cnic_no",
+  "relationship_with_customer",
+  "guarantor_status",
+  "outstanding_balance"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "fieldname": "guarantor",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Guarantor",
+   "options": "Customer",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "fetch_from": "guarantor.customer_name",
+   "fieldname": "guarantor_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Guarantor Name",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "fetch_from": "guarantor.custom_cnic_no",
+   "fieldname": "cnic_no",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "CNIC No",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "fieldname": "relationship_with_customer",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Relationship with Customer",
+   "options": "Father\nMother\nSpouse\nBrother\nSister\nFriend\nRelative",
+   "reqd": 1
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "fieldname": "outstanding_balance",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Outstanding Balance",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "fieldname": "guarantor_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Guarantor Status",
+   "options": "Internal\nExternal",
+   "reqd": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-02-25 23:21:46.134042",
+ "modified_by": "Administrator",
+ "module": "Loan Management",
+ "name": "Loan Guarantor",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

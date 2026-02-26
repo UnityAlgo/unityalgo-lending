@@ -5,8 +5,12 @@ frappe.ui.form.on('Loan Product', {
 	setup(frm) {
 		frm.add_fetch("company", "min_days_bw_disbursement_first_repayment", "min_days_bw_disbursement_first_repayment");
 	},
+	repayment_method: function (frm) {
+		frm.doc.repayment_amount = frm.doc.repayment_periods = "";
+	},
 
-	onload: function(frm) {
+
+	onload: function (frm) {
 		$.each(["penalty_income_account", "interest_income_account"], function (i, field) {
 			frm.set_query(field, function () {
 				return {
@@ -34,7 +38,7 @@ frappe.ui.form.on('Loan Product', {
 });
 
 frappe.ui.form.on('Loan Charges', {
-	charge_type: function(frm, cdt, cdn) {
+	charge_type: function (frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
 
 		if (!row.charge_type)
@@ -46,8 +50,8 @@ frappe.ui.form.on('Loan Charges', {
 				charge_type: row.charge_type,
 				company: frm.doc.company,
 			},
-			callback: function(r) {
-				if(r.message) {
+			callback: function (r) {
+				if (r.message) {
 					for (const account_field in r.message) {
 						frappe.model.set_value(row.doctype, row.name, account_field, r.message[account_field]);
 					}

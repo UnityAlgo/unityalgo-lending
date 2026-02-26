@@ -17,6 +17,7 @@
   "company",
   "posting_date",
   "status",
+  "sales_person",
   "section_break_8",
   "loan_product",
   "repayment_schedule_type",
@@ -474,16 +475,23 @@
    "fieldname": "loan_classification_details_section",
    "fieldtype": "Section Break",
    "label": "Loan Classification Details"
+  },
+  {
+   "fieldname": "sales_person",
+   "fieldtype": "Link",
+   "label": "Sales Person",
+   "options": "Sales Person",
+   "reqd": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-01-28 16:04:33.888412",
+ "modified": "2026-02-13 23:12:45.721282",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan",
- "naming_rule": "Expression (old style)",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {

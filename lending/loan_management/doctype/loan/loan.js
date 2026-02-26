@@ -4,11 +4,11 @@
 lending.common.setup_filters("Loan");
 
 frappe.ui.form.on('Loan', {
-	setup: function(frm) {
+	setup: function (frm) {
 		frm.make_methods = {
-			'Loan Disbursement': function() { frm.trigger('make_loan_disbursement') },
-			'Loan Security Unpledge': function() { frm.trigger('create_loan_security_unpledge') },
-			'Loan Write Off': function() { frm.trigger('make_loan_write_off_entry') }
+			'Loan Disbursement': function () { frm.trigger('make_loan_disbursement') },
+			'Loan Security Unpledge': function () { frm.trigger('create_loan_security_unpledge') },
+			'Loan Write Off': function () { frm.trigger('make_loan_write_off_entry') }
 		}
 	},
 	onload: function (frm) {
@@ -33,7 +33,7 @@ frappe.ui.form.on('Loan', {
 			};
 		});
 
-		$.each(["penalty_income_account", "interest_income_account"], function(i, field) {
+		$.each(["penalty_income_account", "interest_income_account"], function (i, field) {
 			frm.set_query(field, function () {
 				return {
 					"filters": {
@@ -66,47 +66,47 @@ frappe.ui.form.on('Loan', {
 
 		if (frm.doc.docstatus == 1) {
 			if (["Disbursed", "Partially Disbursed"].includes(frm.doc.status) && (!frm.doc.repay_from_salary)) {
-				frm.add_custom_button(__('Request Loan Closure'), function() {
-					frm.trigger("request_loan_closure");
-				},__('Status'));
+				// frm.add_custom_button(__('Request Loan Closure'), function () {
+				// 	frm.trigger("request_loan_closure");
+				// }, __('Status'));
 
-				frm.add_custom_button(__('Loan Repayment'), function() {
+				frm.add_custom_button(__('Loan Repayment'), function () {
 					frm.trigger("make_repayment_entry");
-				},__('Create'));
+				}, __('Create'));
 			}
 
 			if (["Sanctioned", "Partially Disbursed"].includes(frm.doc.status)) {
-				frm.add_custom_button(__('Loan Disbursement'), function() {
+				frm.add_custom_button(__('Loan Disbursement'), function () {
 					frm.trigger("make_loan_disbursement");
-				},__('Create'));
+				}, __('Create'));
 			}
 
 			if (frm.doc.status == "Loan Closure Requested") {
-				frm.add_custom_button(__('Loan Security Unpledge'), function() {
+				frm.add_custom_button(__('Loan Security Unpledge'), function () {
 					frm.trigger("create_loan_security_unpledge");
-				},__('Create'));
+				}, __('Create'));
 			}
 
 			if (["Loan Closure Requested", "Disbursed", "Partially Disbursed"].includes(frm.doc.status)) {
-				frm.add_custom_button(__('Loan Write Off'), function() {
-					frm.trigger("make_loan_write_off_entry");
-				},__('Create'));
+				// frm.add_custom_button(__('Loan Write Off'), function() {
+				// 	frm.trigger("make_loan_write_off_entry");
+				// },__('Create'));
 
-				frm.add_custom_button(__('Loan Refund'), function() {
+				frm.add_custom_button(__('Loan Refund'), function () {
 					frm.trigger("make_loan_refund");
-				},__('Create'));
+				}, __('Create'));
 			}
 
 			if (frm.doc.status == "Loan Closure Requested" && frm.doc.is_term_loan && !frm.doc.is_secured_loan) {
-				frm.add_custom_button(__('Close Loan'), function() {
+				frm.add_custom_button(__('Close Loan'), function () {
 					frm.trigger("close_unsecured_term_loan");
-				},__('Status'));
+				}, __('Status'));
 			}
 		}
 		frm.trigger("toggle_fields");
 	},
 
-	repayment_schedule_type: function(frm) {
+	repayment_schedule_type: function (frm) {
 		if (frm.doc.repayment_schedule_type == "Pro-rated calendar months") {
 			frm.set_df_property("repayment_start_date", "label", "Interest Calculation Start Date");
 		} else {
@@ -114,7 +114,7 @@ frappe.ui.form.on('Loan', {
 		}
 	},
 
-	loan_product: function(frm) {
+	loan_product: function (frm) {
 		frm.toggle_reqd("repayment_method", frm.doc.is_term_loan);
 		frm.toggle_display("repayment_method", frm.doc.is_term_loan);
 		frm.toggle_display("repayment_periods", frm.doc.is_term_loan);
@@ -141,7 +141,7 @@ frappe.ui.form.on('Loan', {
 		})
 	},
 
-	make_repayment_entry: function(frm) {
+	make_repayment_entry: function (frm) {
 		frappe.call({
 			args: {
 				"loan": frm.doc.name,
@@ -160,7 +160,7 @@ frappe.ui.form.on('Loan', {
 		})
 	},
 
-	make_loan_write_off_entry: function(frm) {
+	make_loan_write_off_entry: function (frm) {
 		frappe.call({
 			args: {
 				"loan": frm.doc.name,
@@ -176,7 +176,7 @@ frappe.ui.form.on('Loan', {
 		})
 	},
 
-	make_loan_refund: function(frm) {
+	make_loan_refund: function (frm) {
 		frappe.call({
 			args: {
 				"loan": frm.doc.name
@@ -191,7 +191,7 @@ frappe.ui.form.on('Loan', {
 		})
 	},
 
-	close_unsecured_term_loan: function(frm) {
+	close_unsecured_term_loan: function (frm) {
 		frappe.call({
 			args: {
 				"loan": frm.doc.name
@@ -203,15 +203,15 @@ frappe.ui.form.on('Loan', {
 		})
 	},
 
-	request_loan_closure: function(frm) {
+	request_loan_closure: function (frm) {
 		frappe.confirm(__("Do you really want to close this loan"),
-			function() {
+			function () {
 				frappe.call({
 					args: {
 						'loan': frm.doc.name
 					},
 					method: "lending.loan_management.doctype.loan.loan.request_loan_closure",
-					callback: function() {
+					callback: function () {
 						frm.reload_doc();
 					}
 				});
@@ -219,14 +219,14 @@ frappe.ui.form.on('Loan', {
 		);
 	},
 
-	create_loan_security_unpledge: function(frm) {
+	create_loan_security_unpledge: function (frm) {
 		frappe.call({
 			method: "lending.loan_management.doctype.loan.loan.unpledge_security",
-			args : {
+			args: {
 				"loan": frm.doc.name,
 				"as_dict": 1
 			},
-			callback: function(r) {
+			callback: function (r) {
 				if (r.message)
 					var doc = frappe.model.sync(r.message)[0];
 				frappe.set_route("Form", doc.doctype, doc.name);
@@ -235,7 +235,7 @@ frappe.ui.form.on('Loan', {
 	},
 
 	loan_application: function (frm) {
-		if(frm.doc.loan_application){
+		if (frm.doc.loan_application) {
 			return frappe.call({
 				method: "lending.loan_management.doctype.loan.loan.get_loan_application",
 				args: {
@@ -252,7 +252,7 @@ frappe.ui.form.on('Loan', {
 						});
 
 						if (frm.doc.is_secured_loan) {
-							$.each(r.message.proposed_pledges, function(i, d) {
+							$.each(r.message.proposed_pledges, function (i, d) {
 								let row = frm.add_child("securities");
 								row.loan_security = d.loan_security;
 								row.qty = d.qty;

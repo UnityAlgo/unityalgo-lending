@@ -9,7 +9,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.model.mapper import get_mapped_doc
-from frappe.utils import cint, flt, rounded
+from frappe.utils import cint, flt, rounded, add_to_date, getdate
 
 from lending.loan_management.doctype.loan.loan import (
     get_sanctioned_amount_limit,
@@ -25,8 +25,8 @@ from lending.loan_management.doctype.loan_security_price.loan_security_price imp
 
 class LoanApplication(Document):
     def validate(self):
-        self.set_pledge_amount()
-        self.set_loan_amount()
+        # self.set_pledge_amount()
+        # self.set_loan_amount()
         self.validate_loan_amount()
 
         if self.is_term_loan:
@@ -37,6 +37,40 @@ class LoanApplication(Document):
 
         self.get_repayment_details()
         self.check_sanctioned_amount_limit()
+
+    def validate_guarantor(self, guarantor):
+        """Validate guarantor can be used at 2 active loan applications at a time"""
+
+        existing_applications = frappe.db.sql(
+            """
+            SELECT name FROM `tabLoan Guarantor`
+            WHERE guarantor = %s AND parent != %s AND parent IN (
+                SELECT name FROM `tabLoan Application`
+                WHERE applicant = %s AND docstatus != 2 AND status NOT IN ('Rejected', 'Closed')
+                """
+            % (guarantor, self.name, self.applicant)
+        )
+        if existing_applications:
+            frappe.throw(
+                _(
+                    "Guarantor {0} is already added in another active loan application"
+                ).format(frappe.bold(guarantor))
+            )
+
+        # active_loans = frappe.db.sql()
+        # if active_loans:
+        #     frappe.throw(
+        #         _("Guarantor {0} is already added in another active loan").format(
+        #             frappe.bold(guarantor)
+        #         )
+        #     )
+
+    def validate_loan_guarantor(self):
+        for i in self.guarantor:
+            if i.guarantor == self.applicant:
+                frappe.throw(_("Applicant cannot be Guarantor"))
+
+            self.validate_guarantor(i.guarantor)
 
     def validate_repayment_method(self):
         if (
@@ -73,12 +107,24 @@ class LoanApplication(Document):
                 )
 
     def validate_loan_amount(self):
+        
         if not self.loan_amount:
+            self.loan_amount = flt(frappe.db.get_value("Loan Product", self.loan_product, "minimum_loan_amount"))
             frappe.throw(_("Loan Amount is mandatory"))
 
-        maximum_loan_limit = frappe.db.get_value(
-            "Loan Product", self.loan_product, "maximum_loan_amount"
+        maximum_loan_limit, minimum_loan_limit = frappe.db.get_value(
+            "Loan Product",
+            self.loan_product,
+            ["maximum_loan_amount", "minimum_loan_amount"],
         )
+
+        if minimum_loan_limit and self.loan_amount < minimum_loan_limit:
+            frappe.throw(
+                _("Loan Amount cannot be less than Minimum Loan Amount of {0}").format(
+                    minimum_loan_limit
+                )
+            )
+
         if maximum_loan_limit and self.loan_amount > maximum_loan_limit:
             frappe.throw(
                 _("Loan Amount cannot exceed Maximum Loan Amount of {0}").format(
@@ -220,7 +266,8 @@ def create_loan(source_name, target_doc=None, submit=0):
         target_doc.interest_income_account = account_details.interest_income_account
         target_doc.penalty_income_account = account_details.penalty_income_account
         target_doc.loan_application = source_name
-
+        target_doc.repayment_start_date = add_to_date(getdate(), months=1)
+        
     doclist = get_mapped_doc(
         "Loan Application",
         source_name,

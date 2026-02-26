@@ -253,6 +253,6 @@ global_search_doctypes = {
 
 
 fixtures = [
-    {"dt": "Custom Field", "filters": [["module", "=", "Loan Mangement"]]},
-    {"dt": "Property Setter", "filters": [["module", "=", "Loan Mangement"]]},
+    {"dt": "Custom Field", "filters": [["module", "=", "Loan Management"]]},
+    {"dt": "Property Setter", "filters": [["module", "=", "Loan Management"]]},
 ]

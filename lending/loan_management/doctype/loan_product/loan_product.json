@@ -82,7 +82,7 @@
   {
    "fieldname": "maximum_loan_amount",
    "fieldtype": "Currency",
-   "label": "Maximum Loan Amount",
+   "label": "Loan Amount",
    "non_negative": 1,
    "options": "Company:company:default_currency"
   },
@@ -305,6 +305,7 @@
   {
    "fieldname": "loan_partners",
    "fieldtype": "Table MultiSelect",
+   "hidden": 1,
    "label": "Loan Partners",
    "options": "Loan Product Loan Partner"
   },
@@ -486,6 +487,7 @@
   {
    "fieldname": "minimum_loan_amount",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Minimum Loan Amount",
    "non_negative": 1,
    "options": "Company:company:default_currency"
@@ -538,7 +540,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-26 04:53:52.129818",
+ "modified": "2026-03-02 06:24:17.673265",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Product",

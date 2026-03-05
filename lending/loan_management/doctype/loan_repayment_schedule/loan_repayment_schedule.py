@@ -5,28 +5,15 @@ import math
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import add_days, add_months, date_diff, flt, get_last_day, getdate
+from frappe.utils import add_days, add_months, flt, get_last_day, getdate, cint
 
 
 class LoanRepaymentSchedule(Document):
-    def make_accrual_entries(self):
-        for row in self.repayment_schedule:
-            loan_process = frappe.new_doc("Process Loan Interest Accrual")
-            loan_process.posting_date = row.payment_date
-            loan_process.loan_product = self.loan_product
-            loan_process.loan = self.loan
-            loan_process.flags.ignore_permissions = True
-            loan_process.insert()
-            loan_process.submit()
-
     def validate(self):
         self.validate_repayment_method()
         self.set_missing_fields()
         self.make_repayment_schedule()
         self.set_repayment_period()
-
-    # def on_submit(self):
-    #     self.make_accrual_entries()
 
     def set_missing_fields(self):
         if self.repayment_method == "Repay Over Number of Periods":
@@ -37,12 +24,14 @@ class LoanRepaymentSchedule(Document):
     def set_repayment_period(self):
         if self.repayment_method == "Repay Fixed Amount per Period":
             repayment_periods = len(self.repayment_schedule)
-
             self.repayment_periods = repayment_periods
 
     def make_repayment_schedule(self):
         if not self.repayment_start_date:
             frappe.throw(_("Repayment Start Date is mandatory for term loans"))
+
+        if self.repayment_schedule:
+            return
 
         schedule_type_details = frappe.db.get_value(
             "Loan Product",
@@ -55,22 +44,16 @@ class LoanRepaymentSchedule(Document):
 
         payment_date = self.repayment_start_date
         balance_amount = self.loan_amount
-        # broken_period_interest_days = date_diff(
-        #     add_months(payment_date, -1), self.posting_date
-        # )
-        # carry_forward_interest = self.adjusted_interest
+        total_interest_precise = 0.0
 
         while balance_amount > 0:
             interest_amount, principal_amount, balance_amount, total_payment, days = (
                 self.get_amounts(
-                    # payment_date,
                     balance_amount,
-                    # schedule_type_details.repayment_schedule_type,
-                    # schedule_type_details.repayment_date_on,
-                    # broken_period_interest_days,
-                    # carry_forward_interest,
                 )
             )
+            # Accumulate unrounded interest for precise APR total
+            total_interest_precise += interest_amount
 
             if (
                 schedule_type_details.repayment_schedule_type
@@ -95,12 +78,6 @@ class LoanRepaymentSchedule(Document):
                 self.repayment_method == "Repay Over Number of Periods"
                 and len(self.get("repayment_schedule")) >= self.repayment_periods
             ):
-                self.get("repayment_schedule")[-1].principal_amount += balance_amount
-                self.get("repayment_schedule")[-1].balance_loan_amount = 0
-                self.get("repayment_schedule")[-1].total_payment = (
-                    self.get("repayment_schedule")[-1].interest_amount
-                    + self.get("repayment_schedule")[-1].principal_amount
-                )
                 balance_amount = 0
 
             if (
@@ -111,8 +88,8 @@ class LoanRepaymentSchedule(Document):
                 next_payment_date = add_single_month(payment_date)
                 payment_date = next_payment_date
 
-            # bmi_days = 0
-            # carry_forward_interest = 0
+        # Adjust last period to ensure APR-consistent totals
+        self._adjust_schedule_for_rounding(total_interest_precise)
 
     def validate_repayment_method(self):
         if (
@@ -130,20 +107,26 @@ class LoanRepaymentSchedule(Document):
                 )
 
     def get_amounts(self, balance_amount):
+        """Calculate periodic payment breakdown using APR methodology.
 
-        months = 12
-        interest_amount = flt(
-            balance_amount * (flt(self.rate_of_interest) / (months * 100)), 2
-        )
+        Interest is calculated as: outstanding_balance × (APR / 12)
+        where APR (Annual Percentage Rate) is the nominal annual rate and
+        12 represents monthly compounding frequency.
 
-        principal_amount = flt(self.monthly_repayment_amount - interest_amount, 2)
-        balance_amount = flt(balance_amount - principal_amount, 2)
+        Values are returned at full precision to minimize cumulative rounding
+        drift across periods. Rounding to display precision is handled when
+        storing values in the repayment schedule rows.
+        """
+        # APR-based monthly interest: balance × (annual_rate / 12)
+        interest_amount = balance_amount * flt(self.rate_of_interest) / (12 * 100)
+        principal_amount = self.monthly_repayment_amount - interest_amount
+        balance_amount = balance_amount - principal_amount
 
         if balance_amount < 0 or abs(balance_amount) < 0.10:
-            principal_amount = flt(principal_amount + balance_amount, 2)
+            principal_amount += balance_amount
             balance_amount = 0.0
 
-        total_payment = flt(principal_amount + interest_amount, 2)
+        total_payment = principal_amount + interest_amount
         return interest_amount, principal_amount, balance_amount, total_payment, 30
 
     # def get_amounts(
@@ -194,10 +177,46 @@ class LoanRepaymentSchedule(Document):
 
     #     if carry_forward_interest:
     #         interest_amount += carry_forward_interest
-
     #     total_payment = principal_amount + interest_amount
-
     #     return interest_amount, principal_amount, balance_amount, total_payment, days
+
+    def _adjust_schedule_for_rounding(self, total_interest_precise):
+        """Adjust the last period to account for cumulative rounding differences.
+
+        When individual period amounts are rounded for display/storage, the sum
+        of rounded values may differ from the rounded sum of precise values.
+        This method adjusts the last period so that:
+        - Total principal paid exactly equals the loan amount
+        - Total interest matches the APR-based precise calculation
+        - Last period balance is exactly zero
+        """
+        if not self.repayment_schedule:
+            return
+
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
+        last_row = self.repayment_schedule[-1]
+
+        # Ensure total principal equals loan amount
+        total_principal_others = flt(
+            sum(row.principal_amount for row in self.repayment_schedule[:-1]), precision
+        )
+        last_row.principal_amount = flt(self.loan_amount - total_principal_others, precision)
+
+        # Adjust interest to match precise APR calculation
+        displayed_total_interest = sum(
+            row.interest_amount for row in self.repayment_schedule
+        )
+        expected_total_interest = flt(total_interest_precise, precision)
+        interest_diff = flt(expected_total_interest - displayed_total_interest, precision)
+
+        if interest_diff:
+            last_row.interest_amount = flt(last_row.interest_amount + interest_diff, precision)
+
+        # Recalculate last row total payment and zero out balance
+        last_row.total_payment = flt(
+            last_row.principal_amount + last_row.interest_amount, precision
+        )
+        last_row.balance_loan_amount = 0
 
     def add_repayment_schedule_row(
         self,
@@ -208,15 +227,17 @@ class LoanRepaymentSchedule(Document):
         balance_loan_amount,
         days,
     ):
+        """Add a row to the repayment schedule, rounding monetary values for display."""
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
         self.append(
             "repayment_schedule",
             {
                 "number_of_days": days,
                 "payment_date": payment_date,
-                "principal_amount": principal_amount,
-                "interest_amount": interest_amount,
-                "total_payment": total_payment,
-                "balance_loan_amount": balance_loan_amount,
+                "principal_amount": flt(principal_amount, precision),
+                "interest_amount": flt(interest_amount, precision),
+                "total_payment": flt(total_payment, precision),
+                "balance_loan_amount": flt(balance_loan_amount, precision),
             },
         )
 
@@ -229,17 +250,34 @@ def add_single_month(date):
 
 
 def get_monthly_repayment_amount(loan_amount, rate_of_interest, repayment_periods):
+    """Calculate the fixed monthly repayment amount using APR methodology.
+
+    Uses the standard amortization formula:
+        PMT = P × r × (1 + r)^n / ((1 + r)^n - 1)
+
+    where:
+        P = loan principal (loan_amount)
+        r = monthly interest rate = APR / 12
+        n = number of repayment periods
+
+    This formula assumes monthly compounding consistent with APR calculations.
+    The result matches standard APR calculators (e.g., calculator.net/apr-calculator).
+    """
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
+
     if rate_of_interest:
         monthly_interest_rate = rate_of_interest / (12 * 100)
 
-        exact = (
-            loan_amount
-            * monthly_interest_rate
-            * (1 + monthly_interest_rate) ** repayment_periods
-        ) / ((1 + monthly_interest_rate) ** repayment_periods - 1)
-
-        monthly_repayment_amount = math.ceil(exact * 100) / 100
+        monthly_repayment_amount = flt(
+            (
+                loan_amount
+                * monthly_interest_rate
+                * (1 + monthly_interest_rate) ** repayment_periods
+            )
+            / ((1 + monthly_interest_rate) ** repayment_periods - 1),
+            2,
+        )
     else:
-        monthly_repayment_amount = flt(flt(loan_amount) / repayment_periods, 2)
+        monthly_repayment_amount = flt(flt(loan_amount) / repayment_periods, precision)
 
     return monthly_repayment_amount

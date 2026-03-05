@@ -86,6 +86,7 @@
   {
    "fieldname": "interest_payable",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Interest Payable",
    "options": "Company:company:default_currency",
    "read_only": 1
@@ -229,6 +230,7 @@
    "fieldname": "repayment_details",
    "fieldtype": "Table",
    "label": "Repayment Details",
+   "no_copy": 1,
    "options": "Loan Repayment Detail",
    "read_only": 1
   },
@@ -250,6 +252,7 @@
   {
    "fieldname": "shortfall_amount",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Shortfall Amount",
    "options": "Company:company:default_currency",
    "read_only": 1
@@ -378,7 +381,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2023-10-11 09:25:15.123899",
+ "modified": "2026-03-05 01:36:56.852484",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Repayment",
@@ -416,6 +419,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],

@@ -107,23 +107,18 @@ class LoanApplication(Document):
                 )
 
     def validate_loan_amount(self):
-        
+
         if not self.loan_amount:
-            self.loan_amount = flt(frappe.db.get_value("Loan Product", self.loan_product, "minimum_loan_amount"))
-            frappe.throw(_("Loan Amount is mandatory"))
-
-        maximum_loan_limit, minimum_loan_limit = frappe.db.get_value(
-            "Loan Product",
-            self.loan_product,
-            ["maximum_loan_amount", "minimum_loan_amount"],
-        )
-
-        if minimum_loan_limit and self.loan_amount < minimum_loan_limit:
-            frappe.throw(
-                _("Loan Amount cannot be less than Minimum Loan Amount of {0}").format(
-                    minimum_loan_limit
+            self.loan_amount = flt(
+                frappe.db.get_value(
+                    "Loan Product", self.loan_product, "maximum_loan_amount"
                 )
             )
+            frappe.throw(_("Loan Amount is mandatory"))
+
+        maximum_loan_limit = frappe.db.get_value(
+            "Loan Product", self.loan_product, "maximum_loan_amount"
+        )
 
         if maximum_loan_limit and self.loan_amount > maximum_loan_limit:
             frappe.throw(
@@ -216,17 +211,14 @@ class LoanApplication(Document):
         balance_amount = self.loan_amount
         self.total_payable_amount = 0
         self.total_payable_interest = 0
+        total_payable_interest = 0
 
         while balance_amount > 0:
-            interest_amount = rounded(
-                balance_amount * flt(self.rate_of_interest) / (12 * 100)
-            )
-            balance_amount = rounded(
-                balance_amount + interest_amount - self.repayment_amount
-            )
+            interest_amount = balance_amount * flt(self.rate_of_interest) / (12 * 100)
+            balance_amount = balance_amount + interest_amount - self.repayment_amount
+            total_payable_interest += interest_amount
 
-            self.total_payable_interest += interest_amount
-
+        self.total_payable_interest = flt(total_payable_interest, 2)
         self.total_payable_amount = self.loan_amount + self.total_payable_interest
 
     def set_loan_amount(self):
@@ -267,7 +259,7 @@ def create_loan(source_name, target_doc=None, submit=0):
         target_doc.penalty_income_account = account_details.penalty_income_account
         target_doc.loan_application = source_name
         target_doc.repayment_start_date = add_to_date(getdate(), months=1)
-        
+
     doclist = get_mapped_doc(
         "Loan Application",
         source_name,

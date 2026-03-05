@@ -17,7 +17,7 @@ class LoanProduct(Document):
         self.set_missing_values()
 
     def set_repayment_details(self):
-        loan_amount = flt(self.minimum_loan_amount, 2)
+        loan_amount = flt(self.maximum_loan_amount, 2)
         balance_amount = loan_amount
         self.total_payable_interest = 0
 
@@ -39,6 +39,7 @@ class LoanProduct(Document):
                             + str(flt(min_repayment_amount, 2))
                         )
                     )
+
                 self.repayment_periods = math.ceil(
                     (
                         math.log(self.repayment_amount)
@@ -49,18 +50,19 @@ class LoanProduct(Document):
             else:
                 self.repayment_periods = loan_amount / self.repayment_amount
 
-        self.total_payable_interest = 0
+        total_payable_interest = 0.0
         while balance_amount > 0:
-            interest_amount = rounded(
-                balance_amount * flt(self.rate_of_interest) / (12 * 100)
-            )
-            balance_amount = rounded(
-                balance_amount + interest_amount - self.repayment_amount
-            )
+            interest_amount = balance_amount * flt(self.rate_of_interest) / (12 * 100)
+            principal_amount = self.repayment_amount - interest_amount
+            balance_amount = balance_amount - principal_amount
 
-            self.total_payable_interest += interest_amount
+            if balance_amount < 0 or abs(balance_amount) < 0.10:
+                balance_amount = 0.0
 
-        self.total_payable_amount = loan_amount + self.total_payable_interest
+            total_payable_interest += interest_amount
+
+        self.total_payable_interest = flt(total_payable_interest, 2)
+        self.total_payable_amount = flt(loan_amount + total_payable_interest, 2)
 
     def validate(self):
         self.validate_accounts()

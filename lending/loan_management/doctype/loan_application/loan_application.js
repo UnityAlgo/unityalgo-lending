@@ -42,7 +42,7 @@ frappe.ui.form.on('Loan Application', {
 	setup: function (frm) {
 
 		if (frm.doc.latitude && frm.doc.longitude) {
-// ÷÷			frm.set_df_property('title', 'reqd', 1)
+			// ÷÷			frm.set_df_property('title', 'reqd', 1)
 
 			frm.set_df_property("map_display", "options", `
   <div style="width:100%;">
@@ -213,7 +213,7 @@ frappe.ui.form.on('Loan Application', {
 frappe.ui.form.on("Loan Guarantor", {
 	guarantor: (frm, cdt, cdn) => {
 		const { guarantor } = frm.doc;
-		
+
 		frappe.model.set_value(cdt, cdn, "outstanding_balance", 0);
 
 		if (guarantor) {

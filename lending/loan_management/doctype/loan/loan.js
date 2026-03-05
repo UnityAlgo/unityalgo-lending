@@ -65,6 +65,14 @@ frappe.ui.form.on('Loan', {
 		}
 
 		if (frm.doc.docstatus == 1) {
+			frm.add_custom_button(__("Loan Repayments"), function () {
+
+				frappe.route_options = {
+					"loan": frm.doc.name
+				}
+				frappe.set_route("query-report", "Loan Repayment Report");
+			}, "View")
+
 			if (["Disbursed", "Partially Disbursed"].includes(frm.doc.status) && (!frm.doc.repay_from_salary)) {
 				// frm.add_custom_button(__('Request Loan Closure'), function () {
 				// 	frm.trigger("request_loan_closure");
@@ -92,9 +100,9 @@ frappe.ui.form.on('Loan', {
 				// 	frm.trigger("make_loan_write_off_entry");
 				// },__('Create'));
 
-				frm.add_custom_button(__('Loan Refund'), function () {
-					frm.trigger("make_loan_refund");
-				}, __('Create'));
+				// frm.add_custom_button(__('Loan Refund'), function () {
+				// 	frm.trigger("make_loan_refund");
+				// }, __('Create'));
 			}
 
 			if (frm.doc.status == "Loan Closure Requested" && frm.doc.is_term_loan && !frm.doc.is_secured_loan) {

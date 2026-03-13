@@ -3,7 +3,7 @@
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, date_diff, flt, get_datetime, getdate
+from frappe.utils import add_days, cint, date_diff, flt, get_datetime, getdate, today
 
 import erpnext
 from erpnext.accounts.general_ledger import make_gl_entries
@@ -51,8 +51,12 @@ class LoanRepayment(AccountsController):
         self.update_paid_amount()
         if self.repayment_type == "Charges Waiver":
             self.make_credit_note()
-
         self.make_gl_entries()
+
+        # self.update_loan_repayment_status()
+        from lending.main import update_loan_repayment_status
+
+        update_loan_repayment_status(frappe.get_doc("Loan", self.against_loan))
 
     def on_cancel(self):
         self.check_future_accruals()
@@ -89,6 +93,85 @@ class LoanRepayment(AccountsController):
             and loan.disbursed_amount > loan.total_principal_paid
         ):
             frappe.db.set_value("Loan", self.against_loan, "status", "Disbursed")
+
+    def update_loan_repayment_status(loan):
+        current_date = getdate(today())
+        new_status = "Regular"
+        schedule = frappe.db.get_all(
+            "Repayment Schedule",
+            filters={"parent": loan.name},
+            fields=[
+                "name",
+                "payment_date",
+                "interest_amount",
+                "principal_amount",
+                "is_accrued",
+            ],
+            order_by="idx asc",
+        )
+
+        if not schedule:
+            return
+
+        final_maturity_date = schedule[-1].payment_date
+        past_due_rows = 0
+        has_partial_payment = False
+        oldest_unpaid_date = None
+
+        for sch in schedule:
+            acc_int = (
+                frappe.db.get_value(
+                    "Loan Interest Accrual",
+                    {"loan": loan.name, "due_date": sch.payment_date, "docstatus": 1},
+                    "sum(interest_amount)",
+                )
+                or 0
+            )
+            acc_prin = (
+                frappe.db.get_value(
+                    "Loan Interest Accrual",
+                    {"loan": loan.name, "due_date": sch.payment_date, "docstatus": 1},
+                    "sum(payable_principal_amount)",
+                )
+                or 0
+            )
+
+            total_billed = flt(sch.interest_amount) + flt(sch.principal_amount)
+            total_paid = flt(acc_int) + flt(acc_prin)
+
+            is_fully_paid = total_paid >= total_billed
+
+            if getdate(sch.payment_date) < current_date and not is_fully_paid:
+                past_due_rows += 1
+
+                if not oldest_unpaid_date:
+                    oldest_unpaid_date = sch.payment_date
+
+                if total_paid > 0:
+                    has_partial_payment = True
+
+        if oldest_unpaid_date:
+            days_late = date_diff(current_date, oldest_unpaid_date)
+
+            if current_date > getdate(final_maturity_date):
+                new_status = "Past Maturity"
+
+            # Rule 3: Arrears (Accumulated unpaid installments > 1 OR Partial Payments)
+            elif past_due_rows > 1 or has_partial_payment:
+                new_status = "Arrears"
+
+            # Rule 2: Missed Repayment (30+ days late, meaning a full cycle was missed)
+            elif days_late >= 30:
+                new_status = "Missed Repayment"
+
+            # Rule 1: Overdue (1 to 29 days late)
+            elif days_late > 0 and days_late < 30:
+                new_status = "Overdue"
+        else:
+            new_status = "Regular"
+
+        if loan.repayment_status != new_status:
+            frappe.db.set_value("Loan", loan.name, "repayment_status", new_status)
 
     def make_credit_note(self):
         item_details = frappe.db.get_value(
@@ -213,7 +296,6 @@ class LoanRepayment(AccountsController):
             self.principal_amount_paid - principal_mapped, precision
         )
 
-        # 2. Calculate Unaccrued Interest Paid
         unaccrued_interest_paid = flt(
             self.total_interest_paid - self.interest_payable, precision
         )
@@ -260,7 +342,7 @@ class LoanRepayment(AccountsController):
                     )
                     accrual_row.db_insert()
             else:
-                # --- CUSTOM TERM LOAN FIXED SCHEDULE LOGIC ---
+                # --- CUSTOM TERM LOAN CASCADING ACCRUAL LOGIC ---
                 schedule_id = frappe.db.get_value(
                     "Loan Repayment Schedule",
                     {"loan": self.against_loan, "docstatus": 1},
@@ -273,9 +355,14 @@ class LoanRepayment(AccountsController):
                     order_by="idx asc",
                 )
 
-                due_date = self.posting_date
+                unmapped_int_remaining = unaccrued_interest_paid
+                unmapped_prin_remaining = unmapped_principal
 
+                # Loop through schedule and create an LIA for each row satisfied
                 for sch in next_schedules:
+                    if unmapped_int_remaining <= 0 and unmapped_prin_remaining <= 0:
+                        break
+
                     acc_int = (
                         frappe.db.get_value(
                             "Loan Interest Accrual",
@@ -301,45 +388,76 @@ class LoanRepayment(AccountsController):
                         or 0
                     )
 
-                    if flt(sch.interest_amount, precision) > flt(
+                    pending_int = flt(sch.interest_amount, precision) - flt(
                         acc_int, precision
-                    ) or flt(sch.principal_amount, precision) > flt(
+                    )
+                    pending_prin = flt(sch.principal_amount, precision) - flt(
                         acc_prin, precision
-                    ):
-                        due_date = sch.payment_date
-                        break
+                    )
 
-                interest_to_accrue = (
-                    unaccrued_interest_paid if has_unaccrued_interest else 0.0
-                )
+                    int_to_book = 0
+                    prin_to_book = 0
 
-                # JIT Accrual Creation (Notice: No penalty logic here!)
-                lia = frappe.new_doc("Loan Interest Accrual")
-                lia.loan = self.against_loan
-                lia.company = self.company
-                lia.posting_date = self.posting_date
-                lia.date_of_accrual = self.posting_date
-                lia.due_date = due_date
-                lia.interest_amount = (
-                    interest_to_accrue if interest_to_accrue > 0 else 0.0
-                )
-                lia.payable_principal_amount = (
-                    unmapped_principal if unmapped_principal > 0 else 0.0
-                )
-                lia.accrual_type = "Repayment"
-                lia.insert(ignore_permissions=True)
-                lia.submit()
+                    if pending_int > 0 and unmapped_int_remaining > 0:
+                        int_to_book = min(pending_int, unmapped_int_remaining)
+                        unmapped_int_remaining -= int_to_book
 
-                accrual_row = self.append(
-                    "repayment_details",
-                    {
-                        "loan_interest_accrual": lia.name,
-                        "paid_interest_amount": lia.interest_amount,
-                        "paid_principal_amount": lia.payable_principal_amount,
-                        "accrual_type": "Repayment",
-                    },
-                )
-                accrual_row.db_insert()
+                    if pending_prin > 0 and unmapped_prin_remaining > 0:
+                        prin_to_book = min(pending_prin, unmapped_prin_remaining)
+                        unmapped_prin_remaining -= prin_to_book
+                    frappe.msgprint(str(sch))
+                    if int_to_book > 0 or prin_to_book > 0:
+                        lia = frappe.new_doc("Loan Interest Accrual")
+                        lia.loan = self.against_loan
+                        lia.company = self.company
+                        lia.posting_date = self.posting_date
+                        lia.date_of_accrual = self.posting_date
+                        lia.due_date = sch.payment_date
+                        lia.interest_amount = int_to_book
+                        lia.payable_principal_amount = prin_to_book
+                        lia.accrual_type = "Repayment"
+                        lia.insert(ignore_permissions=True)
+                        lia.submit()
+
+                        accrual_row = self.append(
+                            "repayment_details",
+                            {
+                                "loan_interest_accrual": lia.name,
+                                "paid_interest_amount": int_to_book,
+                                "paid_principal_amount": prin_to_book,
+                                "accrual_type": "Repayment",
+                            },
+                        )
+                        accrual_row.db_insert()
+
+                # Safety Net: If cash exceeds entire schedule length
+                if unmapped_int_remaining > 0 or unmapped_prin_remaining > 0:
+                    lia = frappe.new_doc("Loan Interest Accrual")
+                    lia.loan = self.against_loan
+                    lia.company = self.company
+                    lia.posting_date = self.posting_date
+                    lia.date_of_accrual = self.posting_date
+                    lia.due_date = self.posting_date
+                    lia.interest_amount = (
+                        unmapped_int_remaining if unmapped_int_remaining > 0 else 0.0
+                    )
+                    lia.payable_principal_amount = (
+                        unmapped_prin_remaining if unmapped_prin_remaining > 0 else 0.0
+                    )
+                    lia.accrual_type = "Repayment"
+                    lia.insert(ignore_permissions=True)
+                    lia.submit()
+
+                    accrual_row = self.append(
+                        "repayment_details",
+                        {
+                            "loan_interest_accrual": lia.name,
+                            "paid_interest_amount": lia.interest_amount,
+                            "paid_principal_amount": lia.payable_principal_amount,
+                            "accrual_type": "Repayment",
+                        },
+                    )
+                    accrual_row.db_insert()
 
     def add_pending_charges(self):
         self.set("pending_charges", [])
@@ -375,7 +493,6 @@ class LoanRepayment(AccountsController):
         # 1. Safely fetch extra tracking fields if they exist in your ERPNext version
         has_total_int_paid = frappe.db.has_column("Loan", "total_interest_paid")
         has_total_pen_paid = frappe.db.has_column("Loan", "total_penalty_paid")
-        # total_interest_payable
 
         if has_total_int_paid:
             loan_fields.append("total_interest_paid")
@@ -397,9 +514,27 @@ class LoanRepayment(AccountsController):
                 self.total_penalty_paid
             )
 
+        # ==========================================
+        # FIX: Update the Accruals in the DB *FIRST*
+        # ==========================================
+        for payment in self.repayment_details:
+            frappe.db.sql(
+                """ UPDATE `tabLoan Interest Accrual`
+                SET paid_principal_amount = `paid_principal_amount` + %s,
+                    paid_interest_amount = `paid_interest_amount` + %s
+                WHERE name = %s""",
+                (
+                    flt(payment.paid_principal_amount, precision),
+                    flt(payment.paid_interest_amount, precision),
+                    payment.loan_interest_accrual,
+                ),
+            )
+
+        # ==========================================
+        # CLOSURE SAFETY GUARD: Now check the DB
+        # ==========================================
         pending_principal_amount = get_pending_principal_amount(loan)
 
-        # 2. CLOSURE SAFETY GUARD: Check for unpaid bills before closing the loan!
         unpaid_accruals = frappe.db.sql(
             """SELECT name FROM `tabLoan Interest Accrual` 
                WHERE loan = %s AND docstatus = 1 
@@ -423,19 +558,6 @@ class LoanRepayment(AccountsController):
                 else "Loan Closure Requested"
             )
             loan["status"] = status
-
-        for payment in self.repayment_details:
-            frappe.db.sql(
-                """ UPDATE `tabLoan Interest Accrual`
-                SET paid_principal_amount = `paid_principal_amount` + %s,
-                    paid_interest_amount = `paid_interest_amount` + %s
-                WHERE name = %s""",
-                (
-                    flt(payment.paid_principal_amount, precision),
-                    flt(payment.paid_interest_amount, precision),
-                    payment.loan_interest_accrual,
-                ),
-            )
 
         if self.repayment_type == "Normal Repayment":
             update_query = "UPDATE `tabLoan` SET total_amount_paid = %s, total_principal_paid = %s, status = %s"
@@ -643,36 +765,89 @@ class LoanRepayment(AccountsController):
                         interest_paid, repayment_details
                     )
 
-                    # 2. BUCKET: Current Month Unaccrued Interest (JIT)
-                    if (
-                        repayment_details.get("unaccrued_interest")
-                        and interest_paid > 0
-                    ):
-                        unaccrued = flt(repayment_details.get("unaccrued_interest"))
-                        if interest_paid >= unaccrued:
-                            self.total_interest_paid += unaccrued
-                            interest_paid -= unaccrued
-                        else:
-                            self.total_interest_paid += interest_paid
-                            interest_paid = 0
-
-                    # 3. BUCKET: Penalty (THIS FIXES YOUR BUG)
+                    # 2. BUCKET: Penalty
                     interest_paid = self.allocate_penalty(interest_paid)
 
-                    # 4. BUCKET: Charges
+                    # 3. BUCKET: Charges
                     self.allocate_charges(interest_paid)
                     interest_paid -= flt(self.total_paid_charges, precision)
 
-                    # 5. BUCKET: Past Due Accrued Principal
+                    # 4. BUCKET: Past Due Accrued Principal
                     interest_paid, updated_entries = (
                         self.allocate_principal_amount_for_term_loans(
                             interest_paid, repayment_details, updated_entries
                         )
                     )
 
-                # 6. BUCKET: Advance / JIT Principal (Whatever cash is left over)
-                if interest_paid > 0:
-                    self.principal_amount_paid += interest_paid
+                    # 5. NEW CASCADING WATERFALL: Future Interest & Principal
+                    if interest_paid > 0:
+                        schedule_id = frappe.db.get_value(
+                            "Loan Repayment Schedule",
+                            {"loan": self.against_loan, "docstatus": 1},
+                            "name",
+                        )
+                        next_schedules = frappe.db.get_all(
+                            "Repayment Schedule",
+                            filters={"parent": schedule_id},
+                            fields=[
+                                "interest_amount",
+                                "principal_amount",
+                                "payment_date",
+                            ],
+                            order_by="idx asc",
+                        )
+
+                        for sch in next_schedules:
+                            if interest_paid <= 0:
+                                break
+
+                            acc_int = (
+                                frappe.db.get_value(
+                                    "Loan Interest Accrual",
+                                    {
+                                        "loan": self.against_loan,
+                                        "due_date": sch.payment_date,
+                                        "docstatus": 1,
+                                    },
+                                    "sum(interest_amount)",
+                                )
+                                or 0
+                            )
+                            acc_prin = (
+                                frappe.db.get_value(
+                                    "Loan Interest Accrual",
+                                    {
+                                        "loan": self.against_loan,
+                                        "due_date": sch.payment_date,
+                                        "docstatus": 1,
+                                    },
+                                    "sum(payable_principal_amount)",
+                                )
+                                or 0
+                            )
+
+                            pending_int = flt(sch.interest_amount, precision) - flt(
+                                acc_int, precision
+                            )
+                            pending_prin = flt(sch.principal_amount, precision) - flt(
+                                acc_prin, precision
+                            )
+
+                            # Priority A: Pay this schedule row's Interest
+                            if pending_int > 0 and interest_paid > 0:
+                                paid_int = min(pending_int, interest_paid)
+                                self.total_interest_paid += paid_int
+                                interest_paid -= paid_int
+
+                            # Priority B: Pay this schedule row's Principal
+                            if pending_prin > 0 and interest_paid > 0:
+                                paid_prin = min(pending_prin, interest_paid)
+                                self.principal_amount_paid += paid_prin
+                                interest_paid -= paid_prin
+
+                        # 6. Safety Net: Any leftover cash beyond entire schedule length goes to principal
+                        if interest_paid > 0:
+                            self.principal_amount_paid += interest_paid
 
             elif self.repayment_type in (
                 "Principal Adjustment",
@@ -921,9 +1096,6 @@ class LoanRepayment(AccountsController):
         payment_account = self.get_payment_account()
         precision = cint(frappe.db.get_default("currency_precision")) or 2
 
-        payment_party_type = "Customer"
-        payment_party = self.applicant
-
         account_details = frappe.db.get_value(
             "Loan Product",
             self.loan_product,
@@ -936,8 +1108,9 @@ class LoanRepayment(AccountsController):
             as_dict=1,
         )
 
+        # 1. THE PENALTY ENTRIES (Realized Income
+        # Impact: Instantly recognizes penalty cash as Revenue on the Profit & Loss (P&L) statement.
         if self.total_penalty_paid:
-            # FIX: Credit the P&L Income Account directly instead of the Receivable Account
             gle_map.append(
                 self.get_gl_dict(
                     {
@@ -949,8 +1122,7 @@ class LoanRepayment(AccountsController):
                         "against_voucher": self.against_loan,
                         "remarks": _("Penalty against loan:") + self.against_loan,
                         "cost_center": self.cost_center,
-                        "party_type": self.applicant_type,
-                        "party": self.applicant,
+                        "branch": self.get("branch"),
                         "posting_date": getdate(self.posting_date),
                     },
                     item=self,
@@ -962,62 +1134,22 @@ class LoanRepayment(AccountsController):
                     {
                         "account": self.penalty_income_account,
                         "against": payment_account,
-                        "party_type": self.applicant_type,
-                        "party": self.applicant,
                         "credit": self.total_penalty_paid,
                         "credit_in_account_currency": self.total_penalty_paid,
                         "against_voucher_type": "Loan",
                         "against_voucher": self.against_loan,
                         "remarks": _("Penalty against loan:") + self.against_loan,
                         "cost_center": self.cost_center,
+                        "branch": self.get("branch"),
                         "posting_date": getdate(self.posting_date),
                     },
                     item=self,
                 )
             )
 
-            # penalty_receivable_account = frappe.db.get_value(
-            #     "Loan Product", self.loan_product, "penalty_receivable_account"
-            # )
-            # gle_map.append(
-            #     self.get_gl_dict(
-            #         {
-            #             "account": payment_account,
-            #             "against": penalty_receivable_account,
-            #             "debit": self.total_penalty_paid,
-            #             "debit_in_account_currency": self.total_penalty_paid,
-            #             "against_voucher_type": "Loan",
-            #             "against_voucher": self.against_loan,
-            #             "remarks": _("Penalty against loan:") + self.against_loan,
-            #             "cost_center": self.cost_center,
-            #             "party_type": self.applicant_type,
-            #             "party": self.applicant,
-            #             "posting_date": getdate(self.posting_date),
-            #         },
-            #         item=self,
-            #     )
-            # )
-
-            # gle_map.append(
-            #     self.get_gl_dict(
-            #         {
-            #             "account": penalty_receivable_account,
-            #             "against": payment_account,
-            #             "party_type": self.applicant_type,
-            #             "party": self.applicant,
-            #             "credit": self.total_penalty_paid,
-            #             "credit_in_account_currency": self.total_penalty_paid,
-            #             "against_voucher_type": "Loan",
-            #             "against_voucher": self.against_loan,
-            #             "remarks": _("Penalty against loan:") + self.against_loan,
-            #             "cost_center": self.cost_center,
-            #             "posting_date": getdate(self.posting_date),
-            #         },
-            #         item=self,
-            #     )
-            # )
-
         for repayment in self.get("repayment_details"):
+            # 2. THE INTEREST ENTRIES (Clearing the Accrual)
+            # Impact: Clears the "Interest Receivable" debt established by the JIT Accrual.
             if repayment.paid_interest_amount:
                 gle_map.append(
                     self.get_gl_dict(
@@ -1032,9 +1164,8 @@ class LoanRepayment(AccountsController):
                             "against_voucher": self.against_loan,
                             "remarks": _(remarks),
                             "cost_center": self.cost_center,
+                            "branch": self.get("branch"),
                             "posting_date": getdate(self.posting_date),
-                            "party_type": payment_party_type,
-                            "party": payment_party,
                         },
                         item=self,
                     )
@@ -1044,8 +1175,6 @@ class LoanRepayment(AccountsController):
                     self.get_gl_dict(
                         {
                             "account": account_details.interest_receivable_account,
-                            "party_type": self.applicant_type,
-                            "party": self.applicant,
                             "against": payment_account,
                             "credit": repayment.paid_interest_amount,
                             "credit_in_account_currency": repayment.paid_interest_amount,
@@ -1053,25 +1182,27 @@ class LoanRepayment(AccountsController):
                             "against_voucher": self.against_loan,
                             "remarks": _(remarks),
                             "cost_center": self.cost_center,
+                            "branch": self.get("branch"),
                             "posting_date": getdate(self.posting_date),
                         },
                         item=self,
                     )
                 )
 
+                # 3. THE NPA ENTRIES (Defaulters / Non-Performing Assets)
+                # Impact: If the customer was marked as a defaulter, this reverses
                 if self.is_npa:
                     gle_map.append(
                         self.get_gl_dict(
                             {
                                 "account": account_details.interest_receivable_account,
                                 "against": account_details.suspense_interest_receivable,
-                                "party_type": self.applicant_type,
-                                "party": self.applicant,
                                 "debit": repayment.paid_interest_amount,
                                 "debit_in_account_currency": repayment.paid_interest_amount,
                                 "against_voucher_type": "Loan",
                                 "against_voucher": self.against_loan,
                                 "cost_center": self.cost_center,
+                                "branch": self.get("branch"),
                                 "posting_date": getdate(self.posting_date),
                             },
                             item=self,
@@ -1082,14 +1213,13 @@ class LoanRepayment(AccountsController):
                         self.get_gl_dict(
                             {
                                 "account": account_details.suspense_interest_receivable,
-                                "party_type": self.applicant_type,
-                                "party": self.applicant,
                                 "against": account_details.interest_receivable_account,
                                 "credit": repayment.paid_interest_amount,
                                 "credit_in_account_currency": repayment.paid_interest_amount,
                                 "against_voucher_type": "Loan",
                                 "against_voucher": self.against_loan,
                                 "cost_center": self.cost_center,
+                                "branch": self.get("branch"),
                                 "posting_date": getdate(self.posting_date),
                             },
                             item=self,
@@ -1103,6 +1233,7 @@ class LoanRepayment(AccountsController):
                                 "credit_in_account_currency": repayment.paid_interest_amount,
                                 "credit": repayment.paid_interest_amount,
                                 "cost_center": self.cost_center,
+                                "branch": self.get("branch"),
                                 "against": account_details.suspense_interest_income,
                             },
                             item=self,
@@ -1116,12 +1247,15 @@ class LoanRepayment(AccountsController):
                                 "debit": repayment.paid_interest_amount,
                                 "debit_in_account_currency": repayment.paid_interest_amount,
                                 "cost_center": self.cost_center,
+                                "branch": self.get("branch"),
                                 "against": account_details.interest_income_account,
                             },
                             item=self,
                         )
                     )
 
+            # 4. THE PRINCIPAL ENTRIES (Reducing the Loan Balance)
+            # Impact: Shifts assets from "Money loaned out" back into "Cash in bank".
             if repayment.paid_principal_amount:
                 gle_map.append(
                     self.get_gl_dict(
@@ -1136,9 +1270,8 @@ class LoanRepayment(AccountsController):
                             "against_voucher": self.against_loan,
                             "remarks": _(remarks),
                             "cost_center": self.cost_center,
+                            "branch": self.get("branch"),
                             "posting_date": getdate(self.posting_date),
-                            "party_type": payment_party_type,
-                            "party": payment_party,
                         },
                         item=self,
                     )
@@ -1148,8 +1281,6 @@ class LoanRepayment(AccountsController):
                     self.get_gl_dict(
                         {
                             "account": self.loan_account,
-                            "party_type": self.applicant_type,
-                            "party": self.applicant,
                             "against": payment_account,
                             "credit": repayment.paid_principal_amount,
                             "credit_in_account_currency": repayment.paid_principal_amount,
@@ -1157,12 +1288,15 @@ class LoanRepayment(AccountsController):
                             "against_voucher": self.against_loan,
                             "remarks": _(remarks),
                             "cost_center": self.cost_center,
+                            "branch": self.get("branch"),
                             "posting_date": getdate(self.posting_date),
                         },
                         item=self,
                     )
                 )
 
+        # 5. THE FALLBACK PRINCIPAL ENTRIES (The Catch-All)
+        # Impact: Safety net. If extra cash is dumped into the loan without
         if (
             not self.get("repayment_details")
             and flt(self.pending_principal_amount, precision) > 0
@@ -1190,9 +1324,8 @@ class LoanRepayment(AccountsController):
                         "against_voucher": self.against_loan,
                         "remarks": _(remarks),
                         "cost_center": self.cost_center,
+                        "branch": self.get("branch"),
                         "posting_date": getdate(self.posting_date),
-                        "party_type": payment_party_type,
-                        "party": payment_party,
                     },
                     item=self,
                 )
@@ -1202,8 +1335,6 @@ class LoanRepayment(AccountsController):
                 self.get_gl_dict(
                     {
                         "account": self.loan_account,
-                        "party_type": self.applicant_type,
-                        "party": self.applicant,
                         "against": payment_account,
                         "credit": flt(self.amount_paid, precision),
                         "credit_in_account_currency": flt(self.amount_paid, precision),
@@ -1211,12 +1342,12 @@ class LoanRepayment(AccountsController):
                         "against_voucher": self.against_loan,
                         "remarks": _(remarks),
                         "cost_center": self.cost_center,
+                        "branch": self.get("branch"),
                         "posting_date": getdate(self.posting_date),
                     },
                     item=self,
                 )
             )
-
         if gle_map:
             make_gl_entries(
                 gle_map, cancel=cancel, adv_adj=adv_adj, merge_entries=False
@@ -1494,9 +1625,8 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
         row = None
         accrued_for_this_row = 0
         accrued_prin_for_this_row = 0
-        oldest_unpaid_due_date = None
 
-        # 1. Loop through schedule to find the current active row and oldest unpaid date
+        # 1. Loop through schedule to evaluate EACH row individually
         for sch in next_schedules:
             acc_int = (
                 frappe.db.get_value(
@@ -1528,41 +1658,42 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
             if flt(sch.interest_amount, precision) > flt(acc_int, precision) or flt(
                 sch.principal_amount, precision
             ) > flt(acc_prin, precision):
-                # Capture the earliest unpaid date for the penalty calculation
-                if not oldest_unpaid_due_date:
-                    oldest_unpaid_due_date = sch.payment_date
-
-                # Target the oldest unpaid row for the primary payment breakdown
+                # Target the oldest unpaid row for the primary payment breakdown UI
                 if not row:
                     row = sch
                     accrued_for_this_row = acc_int
                     accrued_prin_for_this_row = acc_prin
 
-        # 2. NEW PENALTY LOGIC: Calculate exactly ONCE outside the loop
-        if oldest_unpaid_due_date:
-            due_date_after_grace_period = add_days(
-                oldest_unpaid_due_date, loan_product_details.grace_period_in_days
-            )
+                # --- 2. NEW PER-ROW PENALTY LOGIC ---
+                row_due_date_after_grace = add_days(
+                    sch.payment_date, loan_product_details.grace_period_in_days
+                )
 
-            if computed_penalty_date and getdate(computed_penalty_date) >= getdate(
-                due_date_after_grace_period
-            ):
-                due_date_after_grace_period = computed_penalty_date
+                # If they already paid a penalty up to a certain date, don't double charge
+                if computed_penalty_date and getdate(computed_penalty_date) >= getdate(
+                    row_due_date_after_grace
+                ):
+                    row_due_date_after_grace = computed_penalty_date
 
-            no_of_late_days = date_diff(posting_date, due_date_after_grace_period)
+                no_of_late_days = date_diff(posting_date, row_due_date_after_grace)
 
-            # Only calculate if days are positive (naturally ignores future dates)
-            if no_of_late_days > 0 and not (
-                hasattr(against_loan_doc, "repay_from_salary")
-                and against_loan_doc.repay_from_salary
-            ):
-                penalty_amount += (
-                    flt(pending_principal_amount, precision)
-                    * (loan_product_details.penalty_interest_rate / 100)
-                    * no_of_late_days
-                ) / 365
+                # If THIS specific bucket is late...
+                if no_of_late_days > 0 and not (
+                    hasattr(against_loan_doc, "repay_from_salary")
+                    and against_loan_doc.repay_from_salary
+                ):
+                    unpaid_prin_for_this_row = flt(
+                        sch.principal_amount, precision
+                    ) - flt(acc_prin, precision)
 
-        # 3. Handle unaccrued fixed schedule amounts
+                    if unpaid_prin_for_this_row > 0:
+                        # Calculate daily penalty ONLY on this row's missed principal
+                        penalty_amount += (
+                            unpaid_prin_for_this_row
+                            * loan_product_details.penalty_interest_rate
+                        )
+
+        # 3. Handle unaccrued fixed schedule amounts for the UI
         if row:
             unaccrued_int = flt(row.interest_amount) - flt(accrued_for_this_row)
             unaccrued_interest = unaccrued_int if unaccrued_int > 0 else 0

@@ -25,6 +25,7 @@ from lending.loan_management.doctype.loan_security_price.loan_security_price imp
 
 class LoanApplication(Document):
     def validate(self):
+
         # self.set_pledge_amount()
         # self.set_loan_amount()
         self.validate_loan_amount()
@@ -37,40 +38,49 @@ class LoanApplication(Document):
 
         self.get_repayment_details()
         self.check_sanctioned_amount_limit()
+        self.validate_loan_guarantors()
 
     def validate_guarantor(self, guarantor):
-        """Validate guarantor can be used at 2 active loan applications at a time"""
+        settings = frappe.get_doc("LMS Settings")
+        allowed_loans = cint(settings.max_active_loans_per_guarantor)
+        if not allowed_loans:
+            return
 
-        existing_applications = frappe.db.sql(
-            """
-            SELECT name FROM `tabLoan Guarantor`
-            WHERE guarantor = %s AND parent != %s AND parent IN (
-                SELECT name FROM `tabLoan Application`
-                WHERE applicant = %s AND docstatus != 2 AND status NOT IN ('Rejected', 'Closed')
-                """
-            % (guarantor, self.name, self.applicant)
+        active_loans = frappe.db.sql(
+            f"select name from `tabLoan` where applicant = '{guarantor}' and docstatus != 2 and status not in ('Closed', 'Loan Closure Requested') "
         )
-        if existing_applications:
+
+        if len(active_loans) >= allowed_loans:
+            loan_names = ",<br> ".join(
+                [frappe.bold(i[0]) for i in active_loans if i[0]]
+            )
             frappe.throw(
-                _(
-                    "Guarantor {0} is already added in another active loan application"
-                ).format(frappe.bold(guarantor))
+                f"Cannot proceed with this guarantor because they already have active loans <br> {loan_names}."
             )
 
-        # active_loans = frappe.db.sql()
-        # if active_loans:
-        #     frappe.throw(
-        #         _("Guarantor {0} is already added in another active loan").format(
-        #             frappe.bold(guarantor)
-        #         )
-        #     )
+    def validate_loan_guarantors(self):
+        settings = frappe.get_doc("LMS Settings", "LMS Settings")
 
-    def validate_loan_guarantor(self):
+        if not cint(settings.no_of_guarantors_required):
+            return
+
+        if len(self.guarantor) != cint(settings.no_of_guarantors_required):
+            frappe.throw(
+                f"{settings.no_of_guarantors_required} guarantors are required to create a loan application."
+            )
+
+        checked = set()
         for i in self.guarantor:
             if i.guarantor == self.applicant:
                 frappe.throw(_("Applicant cannot be Guarantor"))
 
+            if i.guarantor in checked:
+                frappe.throw(
+                    _(f"Guarantor {i.guarantor} is duplicating at row {i.idx}")
+                )
+
             self.validate_guarantor(i.guarantor)
+            checked.add(i.guarantor)
 
     def validate_repayment_method(self):
         if (

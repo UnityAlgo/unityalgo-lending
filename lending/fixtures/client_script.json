@@ -1,0 +1,13 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Client Script",
+  "dt": "Customer",
+  "enabled": 1,
+  "modified": "2026-03-13 16:59:54.990755",
+  "module": "Loan Management",
+  "name": "Customer",
+  "script": "\nfunction validate_cnic_details(frm) {\n    const {\n        custom_cnic_no,\n        custom_cnic_issue_date,\n        custom_cnic_expiry_date\n    } = frm.doc;\n\n    if (custom_cnic_no) {\n        const cnicRegex = /^\\d{13}$/;\n\n        if (!cnicRegex.test(custom_cnic_no)) {\n            frappe.throw(__('CNIC must be exactly 13 digits without dashes.'));\n        }\n\n        if (custom_cnic_no === \"0000000000000\") {\n            frappe.throw(__('Invalid CNIC number.'));\n        }\n    }\n\n    if (custom_cnic_issue_date) {\n        const today = frappe.datetime.get_today();\n\n        if (custom_cnic_issue_date > today) {\n            frappe.throw(__('CNIC Issue Date cannot be in the future.'));\n        }\n    }\n\n    if (custom_cnic_expiry_date) {\n        const today = frappe.datetime.get_today();\n\n        if (custom_cnic_expiry_date < today) {\n            frappe.throw(__('CNIC Expiry Date cannot be in the past.'));\n        }\n    }\n\n    if (custom_cnic_issue_date && custom_cnic_expiry_date) {\n        if (custom_cnic_expiry_date <= custom_cnic_issue_date) {\n            frappe.throw(__('CNIC Expiry Date must be after Issue Date.'));\n        }\n    }\n}\n\nfrappe.ui.form.on('Customer', {\n    refresh(frm) {\n        // your code here\n    },\n    validate: (frm) => {\n        validate_cnic_details(frm);\n    },\n    custom_cnic_no: (frm) => {\n        validate_cnic_details(frm);\n    },\n    custom_cnic_expiry_date: (frm) => {\n        validate_cnic_details(frm);\n    },\n    custom_cnic_issue_date: (frm) => {\n        validate_cnic_details(frm);\n    },\n})",
+  "view": "Form"
+ }
+]

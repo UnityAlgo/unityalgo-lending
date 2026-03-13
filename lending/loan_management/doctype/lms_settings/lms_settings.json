@@ -1,0 +1,69 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-03-07 21:57:52.449759",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "no_of_guarantors_required",
+  "allow_multi_loaning_for_each_customer",
+  "column_break_ceiv",
+  "max_active_loans_per_guarantor"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "description": "The number of guarantors required for each loan application.",
+   "fieldname": "no_of_guarantors_required",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Guarantors Required for Loan Application",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "max_active_loans_per_guarantor",
+   "fieldtype": "Int",
+   "label": "Max Active Loans per Guarantor",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_ceiv",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_multi_loaning_for_each_customer",
+   "fieldtype": "Check",
+   "label": "Allow Multi Loaning for Each Customer"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-03-12 12:30:48.067686",
+ "modified_by": "Administrator",
+ "module": "Loan Management",
+ "name": "LMS Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

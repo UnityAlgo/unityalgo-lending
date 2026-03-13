@@ -18,6 +18,7 @@
   "posting_date",
   "status",
   "sales_person",
+  "repayment_status",
   "section_break_8",
   "loan_product",
   "repayment_schedule_type",
@@ -86,6 +87,7 @@
    "fieldname": "applicant_name",
    "fieldtype": "Data",
    "in_global_search": 1,
+   "in_list_view": 1,
    "label": "Applicant Name",
    "read_only": 1
   },
@@ -114,6 +116,7 @@
    "fieldname": "posting_date",
    "fieldtype": "Date",
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Posting Date",
    "no_copy": 1,
    "reqd": 1
@@ -169,6 +172,7 @@
    "depends_on": "is_term_loan",
    "fieldname": "repayment_start_date",
    "fieldtype": "Date",
+   "in_standard_filter": 1,
    "label": "Repayment Start Date"
   },
   {
@@ -177,16 +181,20 @@
   },
   {
    "depends_on": "is_term_loan",
+   "fetch_from": "loan_product.repayment_method",
    "fieldname": "repayment_method",
    "fieldtype": "Select",
    "label": "Repayment Method",
-   "options": "\nRepay Fixed Amount per Period\nRepay Over Number of Periods"
+   "options": "\nRepay Fixed Amount per Period\nRepay Over Number of Periods",
+   "read_only": 1
   },
   {
    "depends_on": "is_term_loan",
+   "fetch_from": "loan_product.repayment_periods",
    "fieldname": "repayment_periods",
    "fieldtype": "Int",
-   "label": "Repayment Period in Months"
+   "label": "Repayment Period in Months",
+   "read_only": 1
   },
   {
    "depends_on": "is_term_loan",
@@ -430,6 +438,8 @@
   {
    "fieldname": "branch",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Branch",
    "options": "Branch"
   },
@@ -482,12 +492,22 @@
    "label": "Sales Person",
    "options": "Sales Person",
    "reqd": 1
+  },
+  {
+   "default": "Regular",
+   "fieldname": "repayment_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Repayment Status",
+   "options": "Regular\nOverdue\nMissed Repayment\nArrears\nPast Maturity",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-02-13 23:12:45.721282",
+ "modified": "2026-03-11 06:21:58.844074",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan",

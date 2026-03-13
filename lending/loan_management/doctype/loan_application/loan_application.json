@@ -15,6 +15,13 @@
   "posting_date",
   "status",
   "sales_person",
+  "section_break_heme",
+  "bank_name",
+  "iban_no",
+  "column_break_wyiz",
+  "loan_utilization",
+  "risk_officer",
+  "risk_officer_name",
   "section_break_4",
   "loan_product",
   "is_term_loan",
@@ -63,11 +70,10 @@
    "reqd": 1
   },
   {
-   "depends_on": "applicant",
    "fetch_from": "applicant.customer_name",
    "fieldname": "applicant_name",
    "fieldtype": "Data",
-   "in_global_search": 1,
+   "in_list_view": 1,
    "label": "Applicant Name",
    "read_only": 1
   },
@@ -79,6 +85,8 @@
    "default": "Today",
    "fieldname": "posting_date",
    "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Posting Date",
    "read_only_depends_on": "eval: frappe.user.has_role(\"Loan Officer\") && frappe.session.user != \"Administrator\";"
   },
@@ -86,9 +94,12 @@
    "allow_on_submit": 1,
    "fieldname": "status",
    "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Status",
    "no_copy": 1,
-   "options": "Open\nApproved\nRejected"
+   "options": "Open\nApproved\nRejected",
+   "read_only": 1
   },
   {
    "fieldname": "company",
@@ -107,6 +118,7 @@
    "fieldname": "loan_product",
    "fieldtype": "Link",
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Loan Product",
    "options": "Loan Product",
    "reqd": 1
@@ -241,6 +253,8 @@
   {
    "fieldname": "branch",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Branch",
    "options": "Branch",
    "reqd": 1
@@ -287,12 +301,50 @@
    "fieldname": "map_display",
    "fieldtype": "HTML",
    "label": "Map"
+  },
+  {
+   "fieldname": "section_break_heme",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "bank_name",
+   "fieldtype": "Link",
+   "label": "Bank Name",
+   "options": "Bank",
+   "reqd": 1
+  },
+  {
+   "fieldname": "loan_utilization",
+   "fieldtype": "Data",
+   "label": "Loan Utilization"
+  },
+  {
+   "fieldname": "iban_no",
+   "fieldtype": "Data",
+   "label": "IBAN No"
+  },
+  {
+   "fieldname": "column_break_wyiz",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "risk_officer",
+   "fieldtype": "Link",
+   "label": "Risk Officer",
+   "options": "Employee"
+  },
+  {
+   "fetch_from": "risk_officer.employee_name",
+   "fieldname": "risk_officer_name",
+   "fieldtype": "Data",
+   "label": "Risk Officer Name",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-05 05:51:17.363958",
+ "modified": "2026-03-11 06:19:04.423274",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Application",

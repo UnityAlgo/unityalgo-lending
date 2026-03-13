@@ -89,11 +89,11 @@ frappe.ui.form.on('Loan', {
 				}, __('Create'));
 			}
 
-			if (frm.doc.status == "Loan Closure Requested") {
-				frm.add_custom_button(__('Loan Security Unpledge'), function () {
-					frm.trigger("create_loan_security_unpledge");
-				}, __('Create'));
-			}
+			// if (frm.doc.status == "Loan Closure Requested") {
+			// 	frm.add_custom_button(__('Loan Security Unpledge'), function () {
+			// 		frm.trigger("create_loan_security_unpledge");
+			// 	}, __('Create'));
+			// }
 
 			if (["Loan Closure Requested", "Disbursed", "Partially Disbursed"].includes(frm.doc.status)) {
 				// frm.add_custom_button(__('Loan Write Off'), function() {

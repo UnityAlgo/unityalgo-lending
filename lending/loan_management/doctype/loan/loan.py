@@ -29,6 +29,7 @@ from lending.loan_management.doctype.loan_security_unpledge.loan_security_unpled
 
 class Loan(AccountsController):
     def validate(self):
+        self.update_repayment_schedule()
         self.set_loan_amount()
         self.validate_loan_amount()
         self.set_missing_fields()
@@ -49,6 +50,25 @@ class Loan(AccountsController):
         if self.is_term_loan:
             self.make_draft_schedule()
             self.calculate_totals(on_insert=True)
+
+    def update_repayment_schedule(self):
+        if self.docstatus != 1:
+            return
+
+        schedule_id = frappe.db.get_value(
+            "Loan Repayment Schedule",
+            {"loan": self.name, "docstatus": 1},
+            "name",
+        )
+        if not schedule_id:
+            return
+
+        # frappe.msgprint(str(schedule_id))
+        schedule = frappe.get_doc("Loan Repayment Schedule", schedule_id)
+        schedule.repayment_start_date = self.repayment_start_date
+        schedule.repayment_schedule = []
+        schedule.make_repayment_schedule()
+        schedule.save()
 
     def validate_loan_product(self):
         company = frappe.get_value("Loan Product", self.loan_product, "company")

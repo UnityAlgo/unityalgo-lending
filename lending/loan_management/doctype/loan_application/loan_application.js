@@ -8,11 +8,8 @@ const ALLOWED_ROLES = ["System Manager"];
 
 frappe.ui.form.on('Loan Application', {
 	validate: function (frm) {
-		const { guarantor, latitude, longitude } = frm.doc;
+		const {  latitude, longitude } = frm.doc;
 
-		if (guarantor.length != 2) {
-			frappe.throw("Two guarantors are required to create a loan application.")
-		}
 
 		if (latitude && longitude) return;
 		if (!("geolocation" in navigator)) {

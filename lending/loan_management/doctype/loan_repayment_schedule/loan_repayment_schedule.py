@@ -30,6 +30,11 @@ class LoanRepaymentSchedule(Document):
         if not self.repayment_start_date:
             frappe.throw(_("Repayment Start Date is mandatory for term loans"))
 
+        if self.repayment_start_date != frappe.db.get_value(
+            self.doctype, self.name, "repayment_start_date"
+        ):
+            self.repayment_schedule = []
+
         if self.repayment_schedule:
             return
 
@@ -41,7 +46,6 @@ class LoanRepaymentSchedule(Document):
         )
 
         self.repayment_schedule = []
-
         payment_date = self.repayment_start_date
         balance_amount = self.loan_amount
         total_interest_precise = 0.0
@@ -52,7 +56,7 @@ class LoanRepaymentSchedule(Document):
                     balance_amount,
                 )
             )
-            # Accumulate unrounded interest for precise APR total
+
             total_interest_precise += interest_amount
 
             if (
@@ -200,17 +204,23 @@ class LoanRepaymentSchedule(Document):
         total_principal_others = flt(
             sum(row.principal_amount for row in self.repayment_schedule[:-1]), precision
         )
-        last_row.principal_amount = flt(self.loan_amount - total_principal_others, precision)
+        last_row.principal_amount = flt(
+            self.loan_amount - total_principal_others, precision
+        )
 
         # Adjust interest to match precise APR calculation
         displayed_total_interest = sum(
             row.interest_amount for row in self.repayment_schedule
         )
         expected_total_interest = flt(total_interest_precise, precision)
-        interest_diff = flt(expected_total_interest - displayed_total_interest, precision)
+        interest_diff = flt(
+            expected_total_interest - displayed_total_interest, precision
+        )
 
         if interest_diff:
-            last_row.interest_amount = flt(last_row.interest_amount + interest_diff, precision)
+            last_row.interest_amount = flt(
+                last_row.interest_amount + interest_diff, precision
+            )
 
         # Recalculate last row total payment and zero out balance
         last_row.total_payment = flt(

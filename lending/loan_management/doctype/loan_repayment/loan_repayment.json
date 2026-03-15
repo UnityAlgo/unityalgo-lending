@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "against_loan",
+  "branch",
   "applicant_type",
   "applicant",
   "loan_product",
@@ -377,12 +378,19 @@
    "label": "Loan Restructure",
    "options": "Loan Restructure",
    "read_only": 1
+  },
+  {
+   "fetch_from": "against_loan.branch",
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "label": "Branch",
+   "options": "Branch"
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-08 03:09:45.361192",
+ "modified": "2026-03-15 06:24:35.888994",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Repayment",

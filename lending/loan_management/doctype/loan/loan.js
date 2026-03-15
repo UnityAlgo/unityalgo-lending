@@ -73,6 +73,13 @@ frappe.ui.form.on('Loan', {
 				frappe.set_route("query-report", "Loan Repayment Report");
 			}, "View")
 
+			frm.add_custom_button(__("Borrower Statement"), function () {
+				frappe.route_options = {
+					"customer": frm.doc.applicant
+				}
+				frappe.set_route("query-report", "Borrower Statement");
+			}, "View")
+
 			if (["Disbursed", "Partially Disbursed"].includes(frm.doc.status) && (!frm.doc.repay_from_salary)) {
 				// frm.add_custom_button(__('Request Loan Closure'), function () {
 				// 	frm.trigger("request_loan_closure");

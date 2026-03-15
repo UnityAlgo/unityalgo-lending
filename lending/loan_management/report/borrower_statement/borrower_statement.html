@@ -1,0 +1,138 @@
+<style>
+    .statement-container { font-family: 'Arial', sans-serif; font-size: 11px; color: #333; }
+    .header-logo { text-align: center; margin-bottom: 20px; }
+    .title-bar { background-color: #c4d7eb; color: #1a3b5c; font-size: 16px; font-weight: bold; text-align: center; padding: 8px; letter-spacing: 2px; margin-bottom: 20px; }
+    .info-table { width: 100%; margin-bottom: 30px; font-size: 12px; }
+    .info-table td { vertical-align: top; }
+    .section-header { background-color: #c4d7eb; color: #1a3b5c; font-weight: bold; padding: 6px 10px; font-size: 12px; letter-spacing: 1px; margin-top: 30px; border-top: 2px solid #1a3b5c; border-bottom: 1px solid #1a3b5c; }
+    .data-grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    .data-grid th { text-align: left; font-size: 10px; color: #1a3b5c; padding: 5px 10px; border-bottom: 1px solid #ddd; }
+    .data-grid td { padding: 6px 10px; border-bottom: 1px solid #f0f0f0; }
+    .terms-grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    .terms-grid td { padding: 5px 10px; width: 25%; }
+    .terms-grid .val { text-align: right; }
+    .text-right { text-align: right !important; }
+    .bold { font-weight: bold; }
+    .page-break { page-break-after: always; }
+</style>
+
+<div class="statement-container">
+    {% var multi_loan_data = report.message || []; %}
+    
+    {% if(multi_loan_data.length === 0) { %}
+        <p style="text-align: center; margin-top: 50px;">No active loans found for this client.</p>
+    {% } else { %}
+
+        {% for(var i=0; i < multi_loan_data.length; i++) { %}
+            {% var loan_data = multi_loan_data[i]; %}
+            {% var details = loan_data.loan_details; %}
+            {% var cust = loan_data.customer_details; %}
+            
+            <div class="header-logo">
+                <h3>Care Financial Services</h3>
+            </div>
+            
+            <div class="title-bar">CLIENT STATEMENT</div>
+            
+            <table class="info-table">
+                <tr>
+                    <td>
+                        <span style="font-size: 14px;" class="bold">Care Financial Services Pvt. Ltd</span><br>
+                        A-01 Talagang (004)
+                    </td>
+                    <td class="text-right">
+                        <span class="bold">Date:</span> {%= frappe.datetime.str_to_user(frappe.datetime.nowdate()) %}<br>
+                        {%= cust.name %}<br>
+                        {%= cust.mobile %}<br>
+                        {%= cust.cnic %}<br>
+                        {%= cust.address %}
+                    </td>
+                </tr>
+            </table>
+
+            <div class="section-header">LOAN TERMS</div>
+            <table class="terms-grid">
+                <tr>
+                    <td class="bold">Loan #</td><td class="val">{%= details.name %}</td>
+                    <td class="bold">Interest Amount</td><td class="val">{%= format_currency(details.interest_amount) %}</td>
+                </tr>
+                <tr>
+                    <td class="bold">Disbursement Date</td><td class="val">{%= frappe.datetime.str_to_user(details.disbursement_date) %}</td>
+                    <td class="bold">Non Deductable Fees</td><td class="val">0.00</td>
+                </tr>
+                <tr>
+                    <td class="bold">Maturity Date</td><td class="val">{%= details.maturity_date ? frappe.datetime.str_to_user(details.maturity_date) : '-' %}</td>
+                    <td class="bold">Penalty Amount</td><td class="val">{%= format_currency(details.penalty_amount) %}</td>
+                </tr>
+                <tr>
+                    <td class="bold">Repayment Cycle</td><td class="val">Monthly</td>
+                    <td class="bold">Total Due Amount</td><td class="val">{%= format_currency(details.total_due) %}</td>
+                </tr>
+                <tr>
+                    <td class="bold">Principal Amount</td><td class="val">{%= format_currency(details.principal_amount) %}</td>
+                    <td class="bold">Paid Amount</td><td class="val">{%= format_currency(details.paid_amount) %}</td>
+                </tr>
+                <tr>
+                    <td class="bold">Interest Rate</td><td class="val">{%= details.interest_rate %}%/Year</td>
+                    <td class="bold">Balance Amount</td><td class="val">{%= format_currency(details.balance_amount) %}</td>
+                </tr>
+            </table>
+
+            <div class="section-header">REPAYMENTS</div>
+            <table class="data-grid">
+                <thead>
+                    <tr>
+                        <th>LOAN #</th>
+                        <th>BORROWER NAME</th>
+                        <th>REPAYMENT METHOD</th>
+                        <th>COLLECTED BY</th>
+                        <th>COLLECTION DATE</th>
+                        <th class="text-right">TOTAL PAID AMOUNT</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for(var r=0; r < loan_data.repayments.length; r++) { %}
+                        {% var rep = loan_data.repayments[r]; %}
+                        <tr>
+                            <td>{%= details.name %}</td>
+                            <td>{%= cust.name %}</td>
+                            <td>{%= rep.mode_of_payment || 'Cash' %}</td>
+                            <td>{%= rep.owner %}</td>
+                            <td>{%= frappe.datetime.str_to_user(rep.posting_date) %}</td>
+                            <td class="text-right">{%= format_currency(rep.amount_paid) %}</td>
+                        </tr>
+                    {% } %}
+                </tbody>
+            </table>
+
+            <div class="section-header">STATEMENT OF TRANSACTIONS</div>
+            <table class="data-grid">
+                <thead>
+                    <tr>
+                        <th>DATE</th>
+                        <th>DESCRIPTION</th>
+                        <th class="text-right">DEBIT</th>
+                        <th class="text-right">CREDIT</th>
+                        <th class="text-right">BALANCE</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for(var t=0; t < loan_data.transactions.length; t++) { %}
+                        {% var tx = loan_data.transactions[t]; %}
+                        <tr>
+                            <td>{%= frappe.datetime.str_to_user(tx.date) %}</td>
+                            <td>{%= tx.description %}</td>
+                            <td class="text-right">{%= tx.debit > 0 ? format_currency(tx.debit) : '' %}</td>
+                            <td class="text-right">{%= tx.credit > 0 ? format_currency(tx.credit) : '' %}</td>
+                            <td class="text-right">{%= format_currency(tx.balance) %}</td>
+                        </tr>
+                    {% } %}
+                </tbody>
+            </table>
+
+            {% if (i < multi_loan_data.length - 1) { %}
+                <div class="page-break"></div>
+            {% } %}
+
+        {% } %} {% } %}
+</div>

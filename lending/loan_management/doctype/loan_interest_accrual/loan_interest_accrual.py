@@ -18,9 +18,17 @@ class LoanInterestAccrual(AccountsController):
         if not self.posting_date:
             self.posting_date = nowdate()
 
-        if not self.interest_amount and not self.payable_principal_amount:
-            frappe.throw(_("Interest Amount or Principal Amount is mandatory"))
+        # if not self.interest_amount and not self.payable_principal_amount:
+        #     frappe.throw(_("Interest Amount or Principal Amount is mandatory"))
 
+        if (
+            not self.interest_amount
+            and not self.payable_principal_amount
+            and not self.penalty_amount
+        ):
+            frappe.throw(
+                _("Interest Amount, Principal Amount or Penalty Amount is mandatory")
+            )
         if not self.last_accrual_date:
             self.last_accrual_date = get_last_accrual_date(self.loan, self.posting_date)
 
@@ -42,8 +50,8 @@ class LoanInterestAccrual(AccountsController):
     def make_gl_entries(self, cancel=0, adv_adj=0):
         gle_map = []
 
-        cost_center, loan_product = frappe.db.get_value(
-            "Loan", self.loan, ["cost_center", "loan_product"]
+        cost_center, loan_product, branch = frappe.db.get_value(
+            "Loan", self.loan, ["cost_center", "loan_product", "branch"]
         )
 
         account_details = frappe.db.get_value(
@@ -53,6 +61,8 @@ class LoanInterestAccrual(AccountsController):
                 "interest_receivable_account",
                 "suspense_interest_receivable",
                 "suspense_interest_income",
+                "penalty_receivable_account",
+                "penalty_income_account",
             ],
             as_dict=1,
         )
@@ -80,6 +90,7 @@ class LoanInterestAccrual(AccountsController):
                             "Interest accrued from {0} to {1} against loan: {2}"
                         ).format(self.last_accrual_date, self.posting_date, self.loan),
                         "cost_center": cost_center,
+                        "branch": branch,
                         "posting_date": self.posting_date,
                     },
                     item=self,
@@ -98,6 +109,54 @@ class LoanInterestAccrual(AccountsController):
                         "remarks": (
                             "Interest accrued from {0} to {1} against loan: {2}"
                         ).format(self.last_accrual_date, self.posting_date, self.loan),
+                        "cost_center": cost_center,
+                        "branch": branch,
+                        "posting_date": self.posting_date,
+                    },
+                    item=self,
+                )
+            )
+
+        if (
+            self.penalty_amount
+            and account_details.penalty_receivable_account
+            and account_details.penalty_income_account
+        ):
+            gle_map.append(
+                self.get_gl_dict(
+                    {
+                        "account": account_details.penalty_receivable_account,
+                        "party_type": self.applicant_type,
+                        "party": self.applicant,
+                        "against": account_details.penalty_income_account,
+                        "debit": self.penalty_amount,
+                        "debit_in_account_currency": self.penalty_amount,
+                        "against_voucher_type": "Loan",
+                        "against_voucher": self.loan,
+                        "remarks": _(
+                            "Penalty accrued up to {0} against loan: {1}"
+                        ).format(self.posting_date, self.loan),
+                        "cost_center": cost_center,
+                        "branch": branch,
+                        "posting_date": self.posting_date,
+                    },
+                    item=self,
+                )
+            )
+
+            gle_map.append(
+                self.get_gl_dict(
+                    {
+                        "account": account_details.penalty_income_account,
+                        "against": account_details.penalty_receivable_account,
+                        "credit": self.penalty_amount,
+                        "credit_in_account_currency": self.penalty_amount,
+                        "against_voucher_type": "Loan",
+                        "against_voucher": self.loan,
+                        "branch": branch,
+                        "remarks": _(
+                            "Penalty accrued up to {0} against loan: {1}"
+                        ).format(self.posting_date, self.loan),
                         "cost_center": cost_center,
                         "posting_date": self.posting_date,
                     },
@@ -239,6 +298,7 @@ def make_accrual_interest_entry_for_term_loans(
         args = frappe._dict(
             {
                 "loan": loan.name,
+                "branch": loan.branch,
                 "applicant_type": loan.applicant_type,
                 "applicant": loan.applicant,
                 "interest_income_account": loan.interest_income_account,
@@ -277,6 +337,7 @@ def get_term_loans(date, term_loan=None, loan_product=None):
         .on(loan_repayment_schedule.parent == loan_schedule.name)
         .select(
             loan.name,
+            loan.branch,
             loan.total_payment,
             loan.total_amount_paid,
             loan.loan_account,
@@ -325,6 +386,8 @@ def make_loan_interest_accrual_entry(args):
     loan_interest_accrual.loan = args.loan
     loan_interest_accrual.applicant_type = args.applicant_type
     loan_interest_accrual.applicant = args.applicant
+    loan_interest_accrual.branch = args.branch
+
     loan_interest_accrual.interest_income_account = args.interest_income_account
     loan_interest_accrual.loan_account = args.loan_account
     loan_interest_accrual.pending_principal_amount = flt(

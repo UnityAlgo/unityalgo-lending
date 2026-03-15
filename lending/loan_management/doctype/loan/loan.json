@@ -19,6 +19,7 @@
   "status",
   "sales_person",
   "repayment_status",
+  "overdue_days",
   "section_break_8",
   "loan_product",
   "repayment_schedule_type",
@@ -69,10 +70,12 @@
  ],
  "fields": [
   {
+   "default": "Customer",
    "fieldname": "applicant_type",
    "fieldtype": "Select",
    "label": "Applicant Type",
    "options": "Customer\nEmployee",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -441,7 +444,8 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Branch",
-   "options": "Branch"
+   "options": "Branch",
+   "reqd": 1
   },
   {
    "fieldname": "loan_restructure_count",
@@ -502,12 +506,19 @@
    "label": "Repayment Status",
    "options": "Regular\nOverdue\nMissed Repayment\nArrears\nPast Maturity",
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "overdue_days",
+   "fieldtype": "Int",
+   "label": "Overdue Days",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-11 06:21:58.844074",
+ "modified": "2026-03-16 03:16:56.917666",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan",

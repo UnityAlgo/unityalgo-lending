@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "loan",
+  "branch",
   "loan_product",
   "applicant_type",
   "applicant",
@@ -172,7 +173,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Accrual Type",
-   "options": "Regular\nRepayment\nDisbursement\nCredit Adjustment\nDebit Adjustment\nRefund"
+   "options": "Regular\nRepayment\nDisbursement\nCredit Adjustment\nDebit Adjustment\nRefund\nPenalty"
   },
   {
    "fieldname": "penalty_amount",
@@ -213,13 +214,21 @@
    "fieldname": "is_npa",
    "fieldtype": "Check",
    "label": "Is NPA"
+  },
+  {
+   "fetch_from": "loan.branch",
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "label": "Branch",
+   "options": "Branch",
+   "read_only": 1
   }
  ],
  "in_create": 1,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2023-10-02 22:14:24.469965",
+ "modified": "2026-03-15 06:30:19.978219",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Interest Accrual",
@@ -258,6 +267,7 @@
   }
  ],
  "quick_entry": 1,
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],

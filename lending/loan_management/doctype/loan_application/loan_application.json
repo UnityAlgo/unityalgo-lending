@@ -288,8 +288,7 @@
    "fieldname": "guarantor",
    "fieldtype": "Table",
    "label": "Guarantors",
-   "options": "Loan Guarantor",
-   "reqd": 1
+   "options": "Loan Guarantor"
   },
   {
    "collapsible": 1,
@@ -344,7 +343,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-11 06:19:04.423274",
+ "modified": "2026-03-15 13:24:41.345253",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Application",

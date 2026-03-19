@@ -52,23 +52,26 @@ class Loan(AccountsController):
             self.calculate_totals(on_insert=True)
 
     def update_repayment_schedule(self):
+        schedule_id = frappe.db.get_value(
+            "Loan Repayment Schedule",
+            {"loan": self.name, "docstatus": ["!=", 2]},
+            "name",
+        )
+
+        self.repayment_schedule_name = schedule_id
         if self.docstatus != 1:
             return
 
-        schedule_id = frappe.db.get_value(
-            "Loan Repayment Schedule",
-            {"loan": self.name, "docstatus": 1},
-            "name",
-        )
         if not schedule_id:
             return
 
-        # frappe.msgprint(str(schedule_id))
         schedule = frappe.get_doc("Loan Repayment Schedule", schedule_id)
         schedule.repayment_start_date = self.repayment_start_date
         schedule.repayment_schedule = []
         schedule.make_repayment_schedule()
         schedule.save()
+
+        self.repayment_schedule_name = schedule_id
 
     def validate_loan_product(self):
         company = frappe.get_value("Loan Product", self.loan_product, "company")
@@ -159,6 +162,21 @@ class Loan(AccountsController):
             applicant=self.applicant,
             reverse=not self.manual_npa,
         )
+
+        schedule_id = frappe.db.get_value(
+            "Loan Repayment Schedule",
+            {"loan": self.name, "docstatus": ["!=", 2]},
+            "name",
+        )
+        frappe.db.set_value(
+            self.doctype,
+            self.name,
+            {
+                "repayment_schedule_name": schedule_id,
+            },
+        )
+        frappe.db.commit()
+        self.reload()
 
     def set_missing_fields(self):
         if not self.company:
@@ -1052,3 +1070,41 @@ def move_unpaid_interest_to_suspense_ledger(
 
         jv.flags.ignore_mandatory = True
         jv.submit()
+
+
+@frappe.whitelist()
+def shift_schedule_date(name, new_date, loan_name):
+    row = frappe.get_doc("Repayment Schedule", name)
+    next_payment_date = frappe.db.get_value(
+        "Repayment Schedule", {"parent": row.parent, "idx": row.idx + 1}, "payment_date"
+    )
+
+    if row.is_accrued:
+        frappe.throw(
+            "Cannot change the date of a scheduled installment that has already been accrued or paid."
+        )
+
+    existing_accruals = frappe.db.exists(
+        "Loan Interest Accrual",
+        {"loan": loan_name, "due_date": row.payment_date, "docstatus": 1},
+    )
+    if existing_accruals:
+        frappe.throw(
+            f"Cannot change this date. An accounting accrual or penalty already exists for {row.payment_date}. Cancel the accrual first."
+        )
+
+    if getdate(new_date) < getdate():
+        frappe.throw("You cannot shift a schedule date into the past.")
+
+    if next_payment_date and getdate(new_date) >= getdate(next_payment_date):
+        frappe.throw(
+            f"You cannot shift a schedule date past the next installment date ({next_payment_date})."
+        )
+
+    frappe.db.set_value("Repayment Schedule", name, "payment_date", new_date)
+    frappe.get_doc("Loan", loan_name).add_comment(
+        "Comment",
+        f"Schedule date for row {row.idx} was manually shifted from {row.payment_date} to {new_date}.",
+    )
+
+    return True

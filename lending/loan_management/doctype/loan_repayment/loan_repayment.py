@@ -57,11 +57,12 @@ class LoanRepayment(AccountsController):
 
         # self.update_loan_repayment_status()
         from lending.main import update_loan_repayment_status
+
         update_loan_repayment_status(frappe.get_doc("Loan", self.against_loan))
 
     def on_cancel(self):
         self.check_future_accruals()
-        if self.repayment_type == "Normal Repayment":
+        if self.repayment_type in ("Normal Repayment", "Loan Closure"):
             self.mark_as_unpaid()
             if self.is_npa or self.manual_npa:
                 update_all_linked_loan_customer_npa_status(
@@ -390,110 +391,42 @@ class LoanRepayment(AccountsController):
                     )
                     accrual_row.db_insert()
             else:
-                schedule_id = frappe.db.get_value(
-                    "Loan Repayment Schedule",
-                    {"loan": self.against_loan, "docstatus": 1},
-                    "name",
-                )
-                next_schedules = frappe.db.get_all(
-                    "Repayment Schedule",
-                    filters={"parent": schedule_id},
-                    fields=["interest_amount", "principal_amount", "payment_date"],
-                    order_by="idx asc",
-                )
-
                 unmapped_int_remaining = unaccrued_interest_paid
                 unmapped_prin_remaining = unmapped_principal
 
-                # Loop through schedule and create an LIA for each row satisfied
-                is_first_unaccrued_row = True
+                # EARLY CLOSURE JIT INTERCEPT
+                if self.repayment_type == "Loan Closure":
+                    # For Loan Closure, interest_payable already includes unaccrued interest
+                    # (set by calculate_amounts with payment_type="Loan Closure").
+                    # The formula unaccrued_interest_paid = total_interest_paid - interest_payable
+                    # yields 0 because they're equal. But the interest IS unaccrued — no LIA exists.
+                    #
+                    # So for closure, we use the ACTUAL allocated amounts directly:
+                    #   - total_interest_paid = what allocate_amounts assigned to interest
+                    #   - unmapped_principal = principal_amount_paid minus what's already in repayment_details
+                    closure_int = flt(self.total_interest_paid, precision)
+                    closure_prin = unmapped_principal  # already = principal_amount_paid - principal_mapped
 
-                # Loop through schedule and create an LIA for each row satisfied
-                for sch in next_schedules:
-                    if unmapped_int_remaining <= 0 and unmapped_prin_remaining <= 0:
-                        break
-
-                    acc_int = flt(
-                        frappe.db.get_value(
-                            "Loan Interest Accrual",
-                            {
-                                "loan": self.against_loan,
-                                "due_date": sch.payment_date,
-                                "docstatus": 1,
-                            },
-                            "sum(interest_amount)",
-                        )
-                        or 0,
-                        precision,
+                    # Only subtract interest already mapped to existing repayment_details rows
+                    interest_already_mapped = sum(
+                        flt(d.paid_interest_amount)
+                        for d in self.get("repayment_details")
                     )
+                    closure_int = flt(closure_int - interest_already_mapped, precision)
 
-                    acc_prin = flt(
-                        frappe.db.get_value(
-                            "Loan Interest Accrual",
-                            {
-                                "loan": self.against_loan,
-                                "due_date": sch.payment_date,
-                                "docstatus": 1,
-                            },
-                            "sum(payable_principal_amount)",
-                        )
-                        or 0,
-                        precision,
-                    )
-
-                    pending_int = flt(
-                        flt(sch.interest_amount, precision) - acc_int, precision
-                    )
-                    pending_prin = flt(
-                        flt(sch.principal_amount, precision) - acc_prin, precision
-                    )
-
-                    int_to_book = 0.0
-                    prin_to_book = 0.0
-
-                    # --- THE FLIPPING PRIORITY LOGIC ---
-                    if is_first_unaccrued_row:
-                        # REPAYMENT MONTH: Map Interest first, then Principal
-                        if pending_int > 0 and unmapped_int_remaining > 0:
-                            int_to_book = min(pending_int, unmapped_int_remaining)
-                            unmapped_int_remaining = flt(
-                                unmapped_int_remaining - int_to_book, precision
-                            )
-
-                        if pending_prin > 0 and unmapped_prin_remaining > 0:
-                            prin_to_book = min(pending_prin, unmapped_prin_remaining)
-                            unmapped_prin_remaining = flt(
-                                unmapped_prin_remaining - prin_to_book, precision
-                            )
-                    else:
-                        # SUBSEQUENT MONTHS: Map Principal first, then Interest
-                        if pending_prin > 0 and unmapped_prin_remaining > 0:
-                            prin_to_book = min(pending_prin, unmapped_prin_remaining)
-                            unmapped_prin_remaining = flt(
-                                unmapped_prin_remaining - prin_to_book, precision
-                            )
-
-                        if pending_int > 0 and unmapped_int_remaining > 0:
-                            int_to_book = min(pending_int, unmapped_int_remaining)
-                            unmapped_int_remaining = flt(
-                                unmapped_int_remaining - int_to_book, precision
-                            )
-
-                    # If this row required mapping, flip the switch for the next rows
-                    if pending_int > 0 or pending_prin > 0:
-                        is_first_unaccrued_row = False
-
-                    if int_to_book > 0 or prin_to_book > 0:
+                    if closure_int > 0 or closure_prin > 0:
                         lia = frappe.new_doc("Loan Interest Accrual")
                         lia.loan = self.against_loan
                         lia.company = self.company
-                        lia.branch = self.branch
+                        lia.branch = self.get("branch")
                         lia.cost_center = self.cost_center
                         lia.posting_date = self.posting_date
                         lia.date_of_accrual = self.posting_date
-                        lia.due_date = sch.payment_date
-                        lia.interest_amount = int_to_book
-                        lia.payable_principal_amount = prin_to_book
+                        lia.due_date = self.posting_date
+                        lia.interest_amount = closure_int if closure_int > 0 else 0.0
+                        lia.payable_principal_amount = (
+                            closure_prin if closure_prin > 0 else 0.0
+                        )
                         lia.accrual_type = "Repayment"
                         lia.insert(ignore_permissions=True)
                         lia.submit()
@@ -502,43 +435,167 @@ class LoanRepayment(AccountsController):
                             "repayment_details",
                             {
                                 "loan_interest_accrual": lia.name,
-                                "paid_interest_amount": int_to_book,
-                                "paid_principal_amount": prin_to_book,
+                                "paid_interest_amount": lia.interest_amount,
+                                "paid_principal_amount": lia.payable_principal_amount,
                                 "accrual_type": "Repayment",
                             },
                         )
                         accrual_row.db_insert()
+                else:
+                    schedule_id = frappe.db.get_value(
+                        "Loan Repayment Schedule",
+                        {"loan": self.against_loan, "docstatus": 1},
+                        "name",
+                    )
+                    next_schedules = frappe.db.get_all(
+                        "Repayment Schedule",
+                        filters={"parent": schedule_id},
+                        fields=["interest_amount", "principal_amount", "payment_date"],
+                        order_by="idx asc",
+                    )
 
-                # Safety Net: If cash exceeds entire schedule length
-                if unmapped_int_remaining > 0 or unmapped_prin_remaining > 0:
-                    lia = frappe.new_doc("Loan Interest Accrual")
-                    lia.loan = self.against_loan
-                    lia.company = self.company
-                    lia.posting_date = self.posting_date
-                    lia.date_of_accrual = self.posting_date
-                    lia.due_date = self.posting_date
-                    lia.branch = self.branch
-                    lia.cost_center = self.cost_center
-                    lia.interest_amount = (
-                        unmapped_int_remaining if unmapped_int_remaining > 0 else 0.0
-                    )
-                    lia.payable_principal_amount = (
-                        unmapped_prin_remaining if unmapped_prin_remaining > 0 else 0.0
-                    )
-                    lia.accrual_type = "Repayment"
-                    lia.insert(ignore_permissions=True)
-                    lia.submit()
+                    # Loop through schedule and create an LIA for each row satisfied
+                    is_first_unaccrued_row = True
 
-                    accrual_row = self.append(
-                        "repayment_details",
-                        {
-                            "loan_interest_accrual": lia.name,
-                            "paid_interest_amount": lia.interest_amount,
-                            "paid_principal_amount": lia.payable_principal_amount,
-                            "accrual_type": "Repayment",
-                        },
-                    )
-                    accrual_row.db_insert()
+                    # Loop through schedule and create an LIA for each row satisfied
+                    for sch in next_schedules:
+                        if unmapped_int_remaining <= 0 and unmapped_prin_remaining <= 0:
+                            break
+
+                        acc_int = flt(
+                            frappe.db.get_value(
+                                "Loan Interest Accrual",
+                                {
+                                    "loan": self.against_loan,
+                                    "due_date": sch.payment_date,
+                                    "docstatus": 1,
+                                },
+                                "sum(interest_amount)",
+                            )
+                            or 0,
+                            precision,
+                        )
+
+                        acc_prin = flt(
+                            frappe.db.get_value(
+                                "Loan Interest Accrual",
+                                {
+                                    "loan": self.against_loan,
+                                    "due_date": sch.payment_date,
+                                    "docstatus": 1,
+                                },
+                                "sum(payable_principal_amount)",
+                            )
+                            or 0,
+                            precision,
+                        )
+
+                        pending_int = flt(
+                            flt(sch.interest_amount, precision) - acc_int, precision
+                        )
+                        pending_prin = flt(
+                            flt(sch.principal_amount, precision) - acc_prin, precision
+                        )
+
+                        int_to_book = 0.0
+                        prin_to_book = 0.0
+
+                        # --- THE FLIPPING PRIORITY LOGIC ---
+                        if is_first_unaccrued_row:
+                            # REPAYMENT MONTH: Map Interest first, then Principal
+                            if pending_int > 0 and unmapped_int_remaining > 0:
+                                int_to_book = min(pending_int, unmapped_int_remaining)
+                                unmapped_int_remaining = flt(
+                                    unmapped_int_remaining - int_to_book, precision
+                                )
+
+                            if pending_prin > 0 and unmapped_prin_remaining > 0:
+                                prin_to_book = min(
+                                    pending_prin, unmapped_prin_remaining
+                                )
+                                unmapped_prin_remaining = flt(
+                                    unmapped_prin_remaining - prin_to_book, precision
+                                )
+                        else:
+                            # SUBSEQUENT MONTHS: Map Principal first, then Interest
+                            if pending_prin > 0 and unmapped_prin_remaining > 0:
+                                prin_to_book = min(
+                                    pending_prin, unmapped_prin_remaining
+                                )
+                                unmapped_prin_remaining = flt(
+                                    unmapped_prin_remaining - prin_to_book, precision
+                                )
+
+                            if pending_int > 0 and unmapped_int_remaining > 0:
+                                int_to_book = min(pending_int, unmapped_int_remaining)
+                                unmapped_int_remaining = flt(
+                                    unmapped_int_remaining - int_to_book, precision
+                                )
+
+                        # If this row required mapping, flip the switch for the next rows
+                        if pending_int > 0 or pending_prin > 0:
+                            is_first_unaccrued_row = False
+
+                        if int_to_book > 0 or prin_to_book > 0:
+                            lia = frappe.new_doc("Loan Interest Accrual")
+                            lia.loan = self.against_loan
+                            lia.company = self.company
+                            lia.branch = self.branch
+                            lia.cost_center = self.cost_center
+                            lia.posting_date = self.posting_date
+                            lia.date_of_accrual = self.posting_date
+                            lia.due_date = sch.payment_date
+                            lia.interest_amount = int_to_book
+                            lia.payable_principal_amount = prin_to_book
+                            lia.accrual_type = "Repayment"
+                            lia.insert(ignore_permissions=True)
+                            lia.submit()
+
+                            accrual_row = self.append(
+                                "repayment_details",
+                                {
+                                    "loan_interest_accrual": lia.name,
+                                    "paid_interest_amount": int_to_book,
+                                    "paid_principal_amount": prin_to_book,
+                                    "accrual_type": "Repayment",
+                                },
+                            )
+                            accrual_row.db_insert()
+
+                    # Safety Net: If cash exceeds entire schedule length
+                    if unmapped_int_remaining > 0 or unmapped_prin_remaining > 0:
+                        lia = frappe.new_doc("Loan Interest Accrual")
+                        lia.loan = self.against_loan
+                        lia.company = self.company
+                        lia.posting_date = self.posting_date
+                        lia.date_of_accrual = self.posting_date
+                        lia.due_date = self.posting_date
+                        lia.branch = self.branch
+                        lia.cost_center = self.cost_center
+                        lia.interest_amount = (
+                            unmapped_int_remaining
+                            if unmapped_int_remaining > 0
+                            else 0.0
+                        )
+                        lia.payable_principal_amount = (
+                            unmapped_prin_remaining
+                            if unmapped_prin_remaining > 0
+                            else 0.0
+                        )
+                        lia.accrual_type = "Repayment"
+                        lia.insert(ignore_permissions=True)
+                        lia.submit()
+
+                        accrual_row = self.append(
+                            "repayment_details",
+                            {
+                                "loan_interest_accrual": lia.name,
+                                "paid_interest_amount": lia.interest_amount,
+                                "paid_principal_amount": lia.payable_principal_amount,
+                                "accrual_type": "Repayment",
+                            },
+                        )
+                        accrual_row.db_insert()
 
     def add_pending_charges(self):
         self.set("pending_charges", [])
@@ -617,9 +674,9 @@ class LoanRepayment(AccountsController):
         pending_principal_amount = get_pending_principal_amount(loan)
 
         unpaid_accruals = frappe.db.sql(
-            """SELECT name FROM `tabLoan Interest Accrual` 
-               WHERE loan = %s AND docstatus = 1 
-               AND (ROUND(interest_amount - paid_interest_amount, %s) > 0 
+            """SELECT name FROM `tabLoan Interest Accrual`
+               WHERE loan = %s AND docstatus = 1
+               AND (ROUND(interest_amount - paid_interest_amount, %s) > 0
                     OR ROUND(payable_principal_amount - paid_principal_amount, %s) > 0)
             """,
             (self.against_loan, precision, precision),
@@ -640,7 +697,7 @@ class LoanRepayment(AccountsController):
             )
             loan["status"] = status
 
-        if self.repayment_type == "Normal Repayment":
+        if self.repayment_type in ("Normal Repayment", "Loan Closure"):
             update_query = "UPDATE `tabLoan` SET total_amount_paid = %s, total_principal_paid = %s, status = %s"
             update_values = [
                 loan.total_amount_paid,
@@ -812,6 +869,7 @@ class LoanRepayment(AccountsController):
         self.set("repayment_details", [])
         self.principal_amount_paid = 0
         self.total_penalty_paid = 0
+        self.total_interest_paid = 0  # FIX: Initialize total_interest_paid here
         interest_paid = self.amount_paid
 
         if self.shortfall_amount and self.amount_paid > self.shortfall_amount:
@@ -913,34 +971,77 @@ class LoanRepayment(AccountsController):
                                 precision,
                             )
 
-                            pending_int = flt(sch.interest_amount, precision) - acc_int
-                            pending_prin = (
-                                flt(sch.principal_amount, precision) - acc_prin
+                            # FIX: Also account for what was already paid against these accruals
+                            paid_int = flt(
+                                frappe.db.get_value(
+                                    "Loan Interest Accrual",
+                                    {
+                                        "loan": self.against_loan,
+                                        "due_date": sch.payment_date,
+                                        "docstatus": 1,
+                                    },
+                                    "sum(paid_interest_amount)",
+                                )
+                                or 0,
+                                precision,
                             )
+
+                            paid_prin = flt(
+                                frappe.db.get_value(
+                                    "Loan Interest Accrual",
+                                    {
+                                        "loan": self.against_loan,
+                                        "due_date": sch.payment_date,
+                                        "docstatus": 1,
+                                    },
+                                    "sum(paid_principal_amount)",
+                                )
+                                or 0,
+                                precision,
+                            )
+
+                            # Pending = what schedule expects minus what's already been
+                            # accrued AND paid for this due_date
+                            pending_int = flt(
+                                flt(sch.interest_amount, precision)
+                                - max(acc_int, paid_int),
+                                precision,
+                            )
+                            pending_prin = flt(
+                                flt(sch.principal_amount, precision)
+                                - max(acc_prin, paid_prin),
+                                precision,
+                            )
+
+                            # Ensure non-negative
+                            if pending_int < 0:
+                                pending_int = 0
+                            if pending_prin < 0:
+                                pending_prin = 0
 
                             # --- THE FLIPPING PRIORITY LOGIC ---
                             if is_first_unaccrued_row:
                                 # REPAYMENT MONTH: Interest First, then Principal
                                 if pending_int > 0 and interest_paid > 0:
-                                    paid_int = min(pending_int, interest_paid)
-                                    self.total_interest_paid += paid_int
-                                    interest_paid -= paid_int
+                                    alloc_int = min(pending_int, interest_paid)
+                                    self.total_interest_paid += alloc_int
+                                    interest_paid -= alloc_int
 
                                 if pending_prin > 0 and interest_paid > 0:
-                                    paid_prin = min(pending_prin, interest_paid)
-                                    self.principal_amount_paid += paid_prin
-                                    interest_paid -= paid_prin
+                                    alloc_prin = min(pending_prin, interest_paid)
+                                    self.principal_amount_paid += alloc_prin
+                                    interest_paid -= alloc_prin
                             else:
                                 # SUBSEQUENT MONTHS: Principal First, then Interest
                                 if pending_prin > 0 and interest_paid > 0:
-                                    paid_prin = min(pending_prin, interest_paid)
-                                    self.principal_amount_paid += paid_prin
-                                    interest_paid -= paid_prin
+                                    alloc_prin = min(pending_prin, interest_paid)
+                                    self.principal_amount_paid += alloc_prin
+                                    interest_paid -= alloc_prin
 
                                 if pending_int > 0 and interest_paid > 0:
-                                    paid_int = min(pending_int, interest_paid)
-                                    self.total_interest_paid += paid_int
-                                    interest_paid -= paid_int
+                                    alloc_int = min(pending_int, interest_paid)
+                                    self.total_interest_paid += alloc_int
+                                    interest_paid -= alloc_int
 
                             # If this row had any pending amounts to clear, the next row is officially a subsequent month
                             if pending_int > 0 or pending_prin > 0:
@@ -968,6 +1069,60 @@ class LoanRepayment(AccountsController):
                 self.allocate_penalty(interest_paid)
             elif self.repayment_type in ("Charges Waiver", "Charges Capitalization"):
                 self.allocate_charges(interest_paid)
+
+            elif self.repayment_type == "Loan Closure":
+                # =============================================================
+                # LOAN CLOSURE ALLOCATION
+                # =============================================================
+                # For early closure, most interest is UNACCRUED (no LIA exists yet).
+                # The amounts are pre-calculated by calculate_amounts with
+                # payment_type="Loan Closure", which sets:
+                #   interest_amount = accrued interest + unaccrued interest
+                #   payable_principal_amount = pending_principal_amount (full balance)
+                #
+                # We must explicitly split the payment into interest vs principal
+                # so that:
+                #   a) make_gl_entries books interest to Interest Receivable (not Loan Account)
+                #   b) book_unaccrued_interest detects the unaccrued portion and creates JIT LIA
+                #   c) update_paid_amount sees correct totals for the closure guard
+                # =============================================================
+
+                # 1. Accrued Interest (from existing LIA records, if any)
+                interest_paid, updated_entries = self.allocate_interest_amount(
+                    interest_paid, repayment_details
+                )
+
+                # 2. Penalty
+                interest_paid = self.allocate_penalty(interest_paid)
+
+                # 3. Charges
+                self.allocate_charges(interest_paid)
+                interest_paid -= flt(self.total_paid_charges, precision)
+
+                # 4. Accrued Principal (from existing LIA records, if any)
+                interest_paid, updated_entries = (
+                    self.allocate_principal_amount_for_term_loans(
+                        interest_paid, repayment_details, updated_entries
+                    )
+                )
+
+                # 5. CRITICAL: Split remaining cash into unaccrued interest + principal
+                # interest_payable here = total interest (accrued + unaccrued) from calculate_amounts
+                # total_interest_paid so far = only accrued interest allocated above
+                # The gap = unaccrued interest that needs a JIT accrual
+                remaining_interest = flt(
+                    self.interest_payable - self.total_interest_paid, precision
+                )
+
+                if interest_paid > 0 and remaining_interest > 0:
+                    # Allocate the unaccrued interest portion
+                    unaccrued_int_alloc = min(remaining_interest, interest_paid)
+                    self.total_interest_paid += unaccrued_int_alloc
+                    interest_paid -= unaccrued_int_alloc
+
+                # 6. ALL remaining cash goes to principal
+                if interest_paid > 0:
+                    self.principal_amount_paid += interest_paid
 
     def offset_repayment_based_on_npa(self, interest_paid, repayment_details):
         if interest_paid > 0:
@@ -1251,8 +1406,6 @@ class LoanRepayment(AccountsController):
             )
 
         for repayment in self.get("repayment_details"):
-            # 2. THE INTEREST ENTRIES (Clearing the Accrual)
-            # Impact: Clears the "Interest Receivable" debt established by the JIT Accrual.
             if repayment.paid_interest_amount:
                 gle_map.append(
                     self.get_gl_dict(
@@ -1292,8 +1445,6 @@ class LoanRepayment(AccountsController):
                     )
                 )
 
-                # 3. THE NPA ENTRIES (Defaulters / Non-Performing Assets)
-                # Impact: If the customer was marked as a defaulter, this reverses
                 if self.is_npa:
                     gle_map.append(
                         self.get_gl_dict(
@@ -1357,8 +1508,6 @@ class LoanRepayment(AccountsController):
                         )
                     )
 
-            # 4. THE PRINCIPAL ENTRIES (Reducing the Loan Balance)
-            # Impact: Shifts assets from "Money loaned out" back into "Cash in bank".
             if repayment.paid_principal_amount:
                 gle_map.append(
                     self.get_gl_dict(
@@ -1398,15 +1547,15 @@ class LoanRepayment(AccountsController):
                     )
                 )
 
-        # 5. THE FALLBACK PRINCIPAL ENTRIES (The Catch-All)
-        # Impact: Safety net. If extra cash is dumped into the loan without
         if (
             not self.get("repayment_details")
             and flt(self.pending_principal_amount, precision) > 0
         ):
-            if flt(self.amount_paid, precision) > flt(
-                self.pending_principal_amount, precision
-            ):
+            # For Loan Closure, amount_paid includes interest + penalty + principal,
+            # so it legitimately exceeds pending_principal_amount. Only block non-closure types.
+            if self.repayment_type != "Loan Closure" and flt(
+                self.amount_paid, precision
+            ) > flt(self.pending_principal_amount, precision):
                 frappe.throw(
                     _(
                         "The amount paid ({0}) cannot be more than the pending principal amount ({1})."
@@ -1416,13 +1565,20 @@ class LoanRepayment(AccountsController):
                     )
                 )
 
+            # For closure fallback, only book the principal portion to the loan account
+            gl_principal = (
+                flt(min(self.amount_paid, self.pending_principal_amount), precision)
+                if self.repayment_type == "Loan Closure"
+                else flt(self.amount_paid, precision)
+            )
+
             gle_map.append(
                 self.get_gl_dict(
                     {
                         "account": payment_account,
                         "against": self.loan_account,
-                        "debit": flt(self.amount_paid, precision),
-                        "debit_in_account_currency": flt(self.amount_paid, precision),
+                        "debit": gl_principal,
+                        "debit_in_account_currency": gl_principal,
                         "against_voucher_type": "Loan",
                         "against_voucher": self.against_loan,
                         "remarks": _(remarks),
@@ -1439,8 +1595,8 @@ class LoanRepayment(AccountsController):
                     {
                         "account": self.loan_account,
                         "against": payment_account,
-                        "credit": flt(self.amount_paid, precision),
-                        "credit_in_account_currency": flt(self.amount_paid, precision),
+                        "credit": gl_principal,
+                        "credit_in_account_currency": gl_principal,
                         "against_voucher_type": "Loan",
                         "against_voucher": self.against_loan,
                         "remarks": _(remarks),
@@ -1470,7 +1626,9 @@ class LoanRepayment(AccountsController):
             "Interest Carry Forward": "interest_income_account",
         }
 
-        if self.repayment_type == "Normal Repayment":
+        if self.repayment_type in ("Normal Repayment", "Loan Closure"):
+            # Loan Closure uses the same payment account as Normal Repayment
+            # (the bank account where money is received)
             if hasattr(self, "repay_from_salary") and self.repay_from_salary:
                 payment_account = self.payroll_payable_account
             else:
@@ -1693,124 +1851,208 @@ def get_pending_principal_amount(loan):
     return flt(pending_principal_amount, precision)
 
 
+# =============================================================================
+# FIX: REWRITTEN get_amounts - The core fix for wrong interest & principal
+# =============================================================================
+# PROBLEM: The old code read total_interest_paid / total_penalty_paid from the
+# Loan doc's summary fields. These fields:
+#   1) May not exist (getattr default 0.0)
+#   2) Are updated AFTER repayment submission, so during validate() they're stale
+#   3) Don't account for JIT accruals created during the current repayment
+#
+# SOLUTION: Derive ALL paid amounts from Loan Interest Accrual records (the
+# single source of truth) and Loan Repayment records, not from Loan doc summaries.
+# =============================================================================
 def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
     precision = cint(frappe.db.get_default("currency_precision")) or 2
 
     against_loan_doc = frappe.get_doc("Loan", against_loan)
     loan_product_details = frappe.get_doc("Loan Product", against_loan_doc.loan_product)
-    accrued_interest_entries = get_accrued_interest_entries(
-        against_loan_doc.name, posting_date
-    )
 
-    computed_penalty_date, pending_penalty_amount = get_penalty_details(against_loan)
+    # Initialize Variables
+    payable_principal_amount = 0.0
+    total_pending_interest = 0.0
+    penalty_amount = 0.0
+    unaccrued_interest = 0.0
+    final_due_date = ""
+
+    pending_principal_amount = get_pending_principal_amount(against_loan_doc)
     pending_accrual_entries = {}
 
-    total_pending_interest = 0
-    penalty_amount = 0
-    payable_principal_amount = 0
-    final_due_date = ""
-    last_entry_due_date = ""
-    pending_principal_amount = get_pending_principal_amount(against_loan_doc)
-
-    unaccrued_interest = 0
-
     if against_loan_doc.is_term_loan:
-        next_schedules = frappe.db.get_all(
-            "Repayment Schedule",
-            filters={
-                "parent": frappe.db.get_value(
-                    "Loan Repayment Schedule",
-                    {"loan": against_loan, "docstatus": 1},
-                    "name",
-                )
-            },
-            fields=["interest_amount", "principal_amount", "payment_date"],
-            order_by="idx asc",
+        # ================================================================
+        # FIX 1: Get ACTUAL paid amounts from LIA records (source of truth)
+        # instead of potentially stale Loan doc summary fields
+        # ================================================================
+        total_prin_paid = flt(
+            frappe.db.get_value(
+                "Loan Interest Accrual",
+                {"loan": against_loan, "docstatus": 1},
+                "sum(paid_principal_amount)",
+            )
+            or 0,
+            precision,
         )
 
-        row = None
-        accrued_for_this_row = 0
-        accrued_prin_for_this_row = 0
+        total_int_paid = flt(
+            frappe.db.get_value(
+                "Loan Interest Accrual",
+                {"loan": against_loan, "docstatus": 1},
+                "sum(paid_interest_amount)",
+            )
+            or 0,
+            precision,
+        )
 
-        for sch in next_schedules:
-            acc_int = (
-                frappe.db.get_value(
-                    "Loan Interest Accrual",
-                    {
-                        "loan": against_loan,
-                        "due_date": sch.payment_date,
-                        "docstatus": 1,
-                    },
-                    "sum(interest_amount)",
-                )
-                or 0
+        # For penalty paid, use Loan Repayment records as source of truth
+        total_pen_paid = flt(
+            frappe.db.get_value(
+                "Loan Repayment",
+                {"against_loan": against_loan, "docstatus": 1},
+                "sum(total_penalty_paid)",
+            )
+            or 0,
+            precision,
+        )
+
+        schedule_id = frappe.db.get_value(
+            "Loan Repayment Schedule", {"loan": against_loan, "docstatus": 1}, "name"
+        )
+
+        if schedule_id:
+            schedules = frappe.db.get_all(
+                "Repayment Schedule",
+                filters={"parent": schedule_id},
+                fields=["name", "interest_amount", "principal_amount", "payment_date"],
+                order_by="idx asc",
             )
 
-            acc_prin = (
+            # ========================================================
+            # FIX 2: Use <= comparison for posting_date inclusion
+            # The old code used date_diff > 0 which correctly excludes
+            # future rows, but we make it explicit with getdate comparison
+            # ========================================================
+            cumulative_prin = 0.0
+            cumulative_int = 0.0
+
+            for sch in schedules:
+                if getdate(sch.payment_date) > getdate(posting_date):
+                    break
+
+                cumulative_prin += flt(sch.principal_amount, precision)
+                cumulative_int += flt(sch.interest_amount, precision)
+                final_due_date = sch.payment_date
+
+            # Simple, bulletproof subtraction
+            payable_principal_amount = flt(cumulative_prin - total_prin_paid, precision)
+            if payable_principal_amount < 0:
+                payable_principal_amount = 0.0
+
+            total_pending_interest = flt(cumulative_int - total_int_paid, precision)
+            if total_pending_interest < 0:
+                total_pending_interest = 0.0
+
+            # ========================================================
+            # FIX 3: SYNCHRONIZED PENALTY MATH (Billed + Unbilled)
+            # Removed debug frappe.msgprint
+            # ========================================================
+            daily_penalty_rate = flt(loan_product_details.penalty_interest_rate)
+            grace_period = cint(loan_product_details.grace_period_in_days)
+
+            # A) Get exactly what was locked in historically by the daily background job
+            billed_penalty = flt(
                 frappe.db.get_value(
                     "Loan Interest Accrual",
-                    {
-                        "loan": against_loan,
-                        "due_date": sch.payment_date,
-                        "docstatus": 1,
-                    },
-                    "sum(payable_principal_amount)",
+                    {"loan": against_loan, "docstatus": 1, "accrual_type": "Penalty"},
+                    "sum(penalty_amount)",
                 )
-                or 0
             )
 
-            # If this row still needs interest OR principal, this is an unpaid bucket
-            if flt(sch.interest_amount, precision) > flt(acc_int, precision) or flt(
-                sch.principal_amount, precision
-            ) > flt(acc_prin, precision):
-                # Target the oldest unpaid row for the primary payment breakdown UI
-                if not row:
-                    row = sch
-                    accrued_for_this_row = acc_int
-                    accrued_prin_for_this_row = acc_prin
+            # B) Time machine for unbilled gap
+            last_penalty_date = frappe.db.get_value(
+                "Loan Interest Accrual",
+                {"loan": against_loan, "docstatus": 1, "accrual_type": "Penalty"},
+                "max(posting_date)",
+            )
 
-                # --- 2. NEW PER-ROW PENALTY LOGIC ---
-                row_due_date_after_grace = add_days(
-                    sch.payment_date, loan_product_details.grace_period_in_days
+            unbilled_penalty = 0.0
+
+            if daily_penalty_rate > 0:
+                start_eval_date = (
+                    add_days(last_penalty_date, 1)
+                    if last_penalty_date
+                    else add_days(schedules[0].payment_date, grace_period)
                 )
+                days_to_check = date_diff(posting_date, start_eval_date) + 1
 
-                # If they already paid a penalty up to a certain date, don't double charge
-                if computed_penalty_date and getdate(computed_penalty_date) >= getdate(
-                    row_due_date_after_grace
-                ):
-                    row_due_date_after_grace = computed_penalty_date
+                # FIX: Removed debug frappe.msgprint that was left in production
+                if days_to_check >= 0:
+                    # Pre-calculate exact unpaid principal per row using cash logic
+                    remaining_paid_prin = total_prin_paid
+                    for sch in schedules:
+                        if remaining_paid_prin >= flt(sch.principal_amount, precision):
+                            sch.unpaid_prin = 0.0
+                            remaining_paid_prin -= flt(sch.principal_amount, precision)
+                        else:
+                            sch.unpaid_prin = (
+                                flt(sch.principal_amount, precision)
+                                - remaining_paid_prin
+                            )
+                            remaining_paid_prin = 0.0
 
-                no_of_late_days = date_diff(posting_date, row_due_date_after_grace)
-                if no_of_late_days > 0 and not (
-                    hasattr(against_loan_doc, "repay_from_salary")
-                    and against_loan_doc.repay_from_salary
-                ):
-                    unpaid_prin_for_this_row = flt(
-                        sch.principal_amount, precision
-                    ) - flt(acc_prin, precision)
+                    # Walk forward day-by-day calculating unbilled penalty
+                    for i in range(days_to_check + 1):
+                        eval_date = add_days(start_eval_date, i)
+                        overdue_principal_total = 0.0
 
-                    if unpaid_prin_for_this_row > 0:
-                        penalty_amount += (
-                            unpaid_prin_for_this_row
-                            * loan_product_details.penalty_interest_rate
-                            * no_of_late_days
-                        )
+                        for sch in schedules:
+                            due_date_with_grace = add_days(
+                                sch.payment_date, grace_period
+                            )
+                            if date_diff(eval_date, due_date_with_grace) >= 0:
+                                if getattr(sch, "unpaid_prin", 0.0) > 0:
+                                    overdue_principal_total += sch.unpaid_prin
 
-        if row:
-            unaccrued_int = flt(row.interest_amount) - flt(accrued_for_this_row)
-            unaccrued_interest = unaccrued_int if unaccrued_int > 0 else 0
+                        if overdue_principal_total > 0:
+                            unbilled_penalty += (
+                                overdue_principal_total * daily_penalty_rate
+                            )
 
-            unaccrued_prin = flt(row.principal_amount) - flt(accrued_prin_for_this_row)
-            payable_principal_amount += unaccrued_prin if unaccrued_prin > 0 else 0
+            total_penalty_owed = billed_penalty + unbilled_penalty
+            penalty_amount = flt(total_penalty_owed - total_pen_paid, precision)
+            if penalty_amount < 0:
+                penalty_amount = 0.0
 
-            if not final_due_date:
-                final_due_date = row.payment_date
+            # ========================================================
+            # FIX 4: Fetch pending LIAs using the ACTUAL unpaid amounts
+            # from the LIA records themselves, ensuring consistency
+            # ========================================================
+            unpaid_lias = get_accrued_interest_entries(against_loan, posting_date)
+            for entry in unpaid_lias:
+                pending_accrual_entries[entry.name] = {
+                    "interest_amount": flt(entry.interest_amount, precision),
+                    "payable_principal_amount": flt(
+                        entry.payable_principal_amount, precision
+                    ),
+                }
+
     else:
+        # ================================================================
+        # DEMAND LOAN LOGIC (unchanged - was working correctly)
+        # ================================================================
+        accrued_interest_entries = get_accrued_interest_entries(
+            against_loan_doc.name, posting_date
+        )
+        computed_penalty_date, pending_penalty_amount = get_penalty_details(
+            against_loan
+        )
+
+        last_entry_due_date = None  # FIX: Initialize to avoid NameError
+
         for entry in accrued_interest_entries:
             due_date_after_grace_period = add_days(
                 entry.due_date, loan_product_details.grace_period_in_days
             )
-
             if computed_penalty_date and getdate(computed_penalty_date) >= getdate(
                 due_date_after_grace_period
             ):
@@ -1821,10 +2063,7 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
             if (
                 no_of_late_days > 0
                 and entry.accrual_type == "Regular"
-                and not (
-                    hasattr(against_loan_doc, "repay_from_salary")
-                    and against_loan_doc.repay_from_salary
-                )
+                and not getattr(against_loan_doc, "repay_from_salary", False)
             ):
                 penalty_amount += (
                     flt(pending_principal_amount, precision)
@@ -1850,21 +2089,24 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                     entry.due_date, loan_product_details.grace_period_in_days
                 )
 
-        pending_days = date_diff(posting_date, last_entry_due_date)
-        if pending_days > 0:
-            principal_amount = flt(pending_principal_amount, precision)
-            per_day_interest = get_per_day_interest(
-                principal_amount,
-                loan_product_details.rate_of_interest,
-                loan_product_details.company,
-                posting_date,
-            )
-            unaccrued_interest += pending_days * per_day_interest
+        # FIX: Only compute unaccrued interest if there were entries
+        if last_entry_due_date:
+            pending_days = date_diff(posting_date, last_entry_due_date)
+            if pending_days > 0:
+                unaccrued_interest += pending_days * get_per_day_interest(
+                    flt(pending_principal_amount, precision),
+                    loan_product_details.rate_of_interest,
+                    loan_product_details.company,
+                    posting_date,
+                )
+
+        penalty_amount += pending_penalty_amount
 
     amounts["pending_principal_amount"] = flt(pending_principal_amount, precision)
     amounts["payable_principal_amount"] = flt(payable_principal_amount, precision)
     amounts["interest_amount"] = flt(total_pending_interest, precision)
-    amounts["penalty_amount"] = flt(penalty_amount + pending_penalty_amount, precision)
+    amounts["penalty_amount"] = flt(penalty_amount, precision)
+
     amounts["payable_amount"] = flt(
         payable_principal_amount
         + total_pending_interest

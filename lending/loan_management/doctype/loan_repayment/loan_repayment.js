@@ -35,7 +35,10 @@ frappe.ui.form.on('Loan Repayment', {
 		}
 	},
 
-	payment_type: function (frm) {
+	// FIX: Changed from payment_type to repayment_type to match the actual doctype field name.
+	// The Python backend parameter is still called "payment_type" for backward compatibility,
+	// but we read from the correct form field.
+	repayment_type: function (frm) {
 		if (frm.doc.posting_date) {
 			frm.trigger('calculate_repayment_amounts');
 		}
@@ -47,16 +50,18 @@ frappe.ui.form.on('Loan Repayment', {
 			args: {
 				'against_loan': frm.doc.against_loan,
 				'posting_date': frm.doc.posting_date,
-				'payment_type': frm.doc.payment_type
+				// FIX: Read from repayment_type (the actual doctype field),
+				// not payment_type which doesn't exist on the form
+				'payment_type': frm.doc.repayment_type || ''
 			},
 			callback: function (r) {
 				let amounts = r.message;
 				console.warn(amounts)
 				frm.set_value('amount_paid', 0.0);
-				frm.set_df_property('amount_paid', 'read_only', frm.doc.payment_type == "Loan Closure" ? 1 : 0);
+				frm.set_df_property('amount_paid', 'read_only', frm.doc.repayment_type == "Loan Closure" ? 1 : 0);
 
 				frm.set_value('pending_principal_amount', amounts['pending_principal_amount']);
-				if (frm.doc.is_term_loan || frm.doc.payment_type == "Loan Closure") {
+				if (frm.doc.is_term_loan || frm.doc.repayment_type == "Loan Closure") {
 					frm.set_value('payable_principal_amount', amounts['payable_principal_amount']);
 					frm.set_value('amount_paid', amounts['payable_amount']);
 				}

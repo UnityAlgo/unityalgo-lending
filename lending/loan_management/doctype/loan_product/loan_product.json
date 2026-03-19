@@ -13,6 +13,7 @@
   "rate_of_interest",
   "penalty_interest_method",
   "penalty_interest_rate",
+  "penalty_stop_threshold_days",
   "penalty_interest_value_ptpd",
   "grace_period_in_days",
   "write_off_amount",
@@ -536,11 +537,20 @@
    "fieldtype": "Currency",
    "label": "Total Payable Interest",
    "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.penalty_interest_method == \"Rate\"",
+   "description": "How many days should the system keep charging daily penalties after the loan has expired? After this many days, the loan freezes and goes to collections.",
+   "fieldname": "penalty_stop_threshold_days",
+   "fieldtype": "Int",
+   "label": "Penalty Stop Threshold (Days)",
+   "mandatory_depends_on": "eval:doc.penalty_interest_method == \"Rate\"",
+   "non_negative": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-03-02 06:24:17.673265",
+ "modified": "2026-03-19 05:48:19.423072",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Product",

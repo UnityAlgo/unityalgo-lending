@@ -5,6 +5,7 @@ lending.common.setup_filters("Loan");
 
 frappe.ui.form.on('Loan', {
 	setup: function (frm) {
+
 		frm.make_methods = {
 			'Loan Disbursement': function () { frm.trigger('make_loan_disbursement') },
 			'Loan Security Unpledge': function () { frm.trigger('create_loan_security_unpledge') },
@@ -60,6 +61,8 @@ frappe.ui.form.on('Loan', {
 	},
 
 	refresh: function (frm) {
+		setup_repayment_schedule_updates(frm);
+
 		if (frm.doc.repayment_schedule_type == "Pro-rated calendar months") {
 			frm.set_df_property("repayment_start_date", "label", "Interest Calculation Start Date");
 		}
@@ -293,3 +296,66 @@ frappe.ui.form.on('Loan', {
 		frm.toggle_enable("repayment_periods", frm.doc.repayment_method == "Repay Over Number of Periods")
 	}
 });
+
+
+function setup_repayment_schedule_updates(frm) {
+	if (frm.doc.status === "Disbursed" && frm.doc.docstatus === 1) {
+
+		frm.add_custom_button(__('Adjust Schedule Date'), function () {
+			frappe.db.get_doc("Loan Repayment Schedule", frm.doc.repayment_schedule_name).then(doc => {
+				const records = doc.repayment_schedule.filter(row => row.is_accrued == 0);
+				if (records.length === 0) {
+					frappe.msgprint("No unpaid schedule rows available to adjust.");
+					return;
+				}
+
+				console.log(records)
+
+				let row_options = records.map(r => {
+					return { "label": `Row ${r.idx}: ${r.payment_date} (${r.total_payment} PKR)`, "value": r.name };
+				});
+
+				const dialog = new frappe.ui.Dialog({
+					title: 'Shift Installment Date',
+					fields: [
+						{
+							label: 'Select Schedule Row',
+							fieldname: 'schedule_row',
+							fieldtype: 'Select',
+							options: row_options,
+							reqd: 1
+						},
+						{
+							label: 'New Payment Date',
+							fieldname: 'new_date',
+							fieldtype: 'Date',
+							reqd: 1
+						}
+					],
+					size: 'medium', // small, large, extra-large 
+					primary_action_label: 'Update Date',
+					primary_action(values) {
+						frappe.call({
+							method: "lending.loan_management.doctype.loan.loan.shift_schedule_date",
+							args: {
+								name: values.schedule_row,
+								new_date: values.new_date,
+								loan_name: frm.doc.name
+							},
+							callback: function (r) {
+								if (!r.exc) {
+									frappe.show_alert({ message: __('Schedule Date Updated'), indicator: 'green' });
+									frm.reload_doc();
+									dialog.hide();
+								}
+							}
+						});
+					}
+				});
+
+				dialog.show();
+			})
+
+		}, __('Manage')); // Puts it under a "Manage" dropdown group
+	}
+}

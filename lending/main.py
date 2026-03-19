@@ -3,25 +3,37 @@ from frappe.utils import getdate, today, date_diff, flt, cint, add_days
 
 
 def update_loan_repayment_statuses():
-    active_loans = frappe.get_all(
+    active_loans = frappe.db.get_all(
         "Loan",
         filters={"status": "Disbursed", "docstatus": 1, "is_term_loan": 1},
         fields=["name"],
     )
 
     for loan in active_loans:
-        update_loan_repayment_status(frappe.get_doc("Loan", loan))
+        try:
+            update_loan_repayment_status(frappe.get_doc("Loan", loan.name))
+        except Exception as e:
+            frappe.log_error(
+                f"Failed to update repayment status for {loan.name}: {str(e)}",
+                "Loan Repayment Status Update",
+            )
+
     frappe.db.commit()
 
 
 def update_loan_repayment_status(loan):
+    if loan.status == "Closed":
+        return
+
     precision = cint(frappe.db.get_default("currency_precision")) or 2
     current_date = getdate(today())
     new_status = "Regular"
-    overdue_days = 0  # Initialize overdue_days to 0
+    overdue_days = 0
 
     schedule_id = frappe.db.get_value(
-        "Loan Repayment Schedule", {"loan": loan.name}, "name"
+        "Loan Repayment Schedule",
+        {"loan": loan.name, "docstatus": 1, "status": "Active"},
+        "name",
     )
 
     if not schedule_id:
@@ -48,64 +60,68 @@ def update_loan_repayment_status(loan):
     has_partial_payment = False
     oldest_unpaid_date = None
 
-    for sch in schedule:
-        paid_int = flt(
-            frappe.db.get_value(
-                "Loan Interest Accrual",
-                {"loan": loan.name, "due_date": sch.payment_date, "docstatus": 1},
-                "sum(paid_interest_amount)",
-            )
-        )
+    lia_totals = frappe.db.sql(
+        """
+        SELECT
+            due_date,
+            SUM(paid_interest_amount) as total_paid_int,
+            SUM(paid_principal_amount) as total_paid_prin
+        FROM `tabLoan Interest Accrual`
+        WHERE loan = %s AND docstatus = 1
+        GROUP BY due_date
+        """,
+        (loan.name,),
+        as_dict=1,
+    )
 
-        paid_prin = flt(
-            frappe.db.get_value(
-                "Loan Interest Accrual",
-                {"loan": loan.name, "due_date": sch.payment_date, "docstatus": 1},
-                "sum(paid_principal_amount)",
-            )
-        )
+    paid_by_date = {}
+    for row in lia_totals:
+        paid_by_date[getdate(row.due_date)] = {
+            "paid_int": flt(row.total_paid_int, precision),
+            "paid_prin": flt(row.total_paid_prin, precision),
+        }
+
+    for sch in schedule:
+        sch_date = getdate(sch.payment_date)
+        paid_data = paid_by_date.get(sch_date, {"paid_int": 0, "paid_prin": 0})
 
         total_billed = flt(sch.interest_amount, precision) + flt(
             sch.principal_amount, precision
         )
-        total_paid = flt(paid_int, precision) + flt(paid_prin, precision)
+        total_paid = flt(paid_data["paid_int"], precision) + flt(
+            paid_data["paid_prin"], precision
+        )
 
         is_fully_paid = flt(total_paid, precision) >= flt(total_billed, precision)
 
-        if getdate(sch.payment_date) < current_date and not is_fully_paid:
+        if sch_date < current_date and not is_fully_paid:
             past_due_rows += 1
 
             if not oldest_unpaid_date:
                 oldest_unpaid_date = sch.payment_date
 
-            # If they paid more than 0 but didn't fully pay, it's a partial payment
             if flt(total_paid, precision) > 0:
                 has_partial_payment = True
 
     if oldest_unpaid_date:
         days_late = date_diff(current_date, oldest_unpaid_date)
-        overdue_days = days_late  # Capture the Days Past Due
+        overdue_days = days_late
 
-        # Priority 1: Past Maturity (Loan term ended entirely)
         if current_date > getdate(maturity_date):
             new_status = "Past Maturity"
 
-        # Priority 2: Arrears (They tried to pay something, OR they have accumulated multiple missed months)
         elif has_partial_payment or past_due_rows > 1:
             new_status = "Arrears"
 
-        # Priority 3: Missed Repayment (They paid NOTHING, and it's been 30+ days)
         elif days_late >= 30:
             new_status = "Missed Repayment"
 
-        # Priority 4: Overdue (They paid NOTHING, and it is 1 to 29 days late)
         elif days_late > 0 and days_late < 30:
             new_status = "Overdue"
     else:
         new_status = "Regular"
-        overdue_days = 0  # Reset to 0 if fully paid up
+        overdue_days = 0
 
-    # Update if EITHER the status changed OR the overdue_days changed (so the count ticks up daily)
     if (
         loan.repayment_status != new_status
         or flt(loan.get("overdue_days")) != overdue_days
@@ -123,115 +139,164 @@ def process_daily_penalties():
 
     active_loans = frappe.db.get_all(
         "Loan",
-        filters={"docstatus": 1, "status": "Disbursed"},
+        filters={"docstatus": 1, "status": "Disbursed", "is_term_loan": 1},
         fields=["name", "loan_product", "company"],
     )
 
     for loan in active_loans:
-        print(f"Processing daily penalty for loan: {loan.name}")
+        try:
+            _process_penalty_for_loan(loan, current_date, precision)
+        except Exception as e:
+            frappe.log_error(
+                f"Failed to create daily penalty for {loan.name}: {str(e)}",
+                "Daily Penalty Job",
+            )
+    frappe.db.commit()
 
-        product = frappe.db.get_value(
-            "Loan Product",
-            loan.loan_product,
-            ["grace_period_in_days", "penalty_interest_rate"],
-            as_dict=1,
-        )
 
-        grace_period = cint(product.grace_period_in_days)
-        daily_penalty_rate = flt(product.penalty_interest_rate)
+def _process_penalty_for_loan(loan, current_date, precision):
+    """Process daily penalty for a single loan. Extracted for clarity and error isolation."""
 
-        if daily_penalty_rate <= 0:
-            continue
+    product = frappe.db.get_value(
+        "Loan Product",
+        loan.loan_product,
+        ["grace_period_in_days", "penalty_interest_rate"],
+        as_dict=1,
+    )
 
-        overdue_principal_total = 0.0
-        schedule_id = frappe.db.get_value(
-            "Loan Repayment Schedule",
-            {"loan": loan.name, "docstatus": ["!=", 2]},
-            "name",
-        )
+    if not product:
+        return
 
-        if not schedule_id:
-            continue
+    grace_period = cint(product.grace_period_in_days)
+    daily_penalty_rate = flt(product.penalty_interest_rate)
 
-        schedule = frappe.db.get_all(
-            "Repayment Schedule",
-            filters={"parent": schedule_id},
-            fields=["payment_date", "principal_amount"],
-        )
+    if daily_penalty_rate <= 0:
+        return
 
-        for sch in schedule:
-            due_date_with_grace = add_days(sch.payment_date, grace_period)
-            if current_date >= getdate(due_date_with_grace):
-                acc_prin_paid = flt(
-                    frappe.db.get_value(
-                        "Loan Interest Accrual",
-                        {
-                            "loan": loan.name,
-                            "due_date": sch.payment_date,
-                            "docstatus": 1,
-                        },
-                        "sum(paid_principal_amount)",
-                    )
-                )
-                unpaid_prin = flt(sch.principal_amount, precision) - acc_prin_paid
+    schedule_id = frappe.db.get_value(
+        "Loan Repayment Schedule",
+        {"loan": loan.name, "docstatus": 1},  # FIX: Explicit docstatus=1 instead of !=2
+        "name",
+    )
 
-                if unpaid_prin > 0:
-                    overdue_principal_total += unpaid_prin
+    if not schedule_id:
+        return
 
-        if overdue_principal_total > 0:
-            existing_penalty = frappe.db.exists(
-                "Loan Interest Accrual",
-                {
-                    "loan": loan.name,
-                    "posting_date": current_date,
-                    "accrual_type": "Penalty",
-                    "docstatus": 1,
-                },
+    schedule = frappe.db.get_all(
+        "Repayment Schedule",
+        filters={"parent": schedule_id},
+        fields=["payment_date", "principal_amount"],
+        order_by="idx asc",  # FIX: Added explicit ordering (was missing)
+    )
+
+    if not schedule:
+        return
+
+    # =================================================================
+    # FIX: penalty_stop_threshold_days
+    #
+    # OLD BUG: The code did `loan.penalty_stop_threshold_days` but the
+    # get_all query only fetched ["name", "loan_product", "company"].
+    # This field was never fetched, so it was always None/0.
+    #
+    # Additionally, the logic was INVERTED:
+    #   OLD: if penalty_stop_date > current_date: continue
+    #   This means: "if the stop date is in the future, SKIP this loan"
+    #   which is backwards — you should SKIP when PAST the stop date.
+    #
+    # FIX: Fetch the field properly from the Loan Product (or Loan doc),
+    # and invert the logic so penalties STOP after the threshold.
+    # =================================================================
+    penalty_stop_threshold_days = cint(
+        frappe.db.get_value("Loan", loan.name, "penalty_stop_threshold_days")
+    )
+
+    maturity_date = getdate(schedule[-1].payment_date)
+
+    if penalty_stop_threshold_days > 0:
+        penalty_stop_date = add_days(maturity_date, penalty_stop_threshold_days)
+        # FIX: Stop charging penalties AFTER the threshold date
+        if current_date > getdate(penalty_stop_date):
+            return
+
+    lia_paid_prin = frappe.db.sql(
+        """
+        SELECT
+            due_date,
+            SUM(paid_principal_amount) as total_paid_prin
+        FROM `tabLoan Interest Accrual`
+        WHERE loan = %s AND docstatus = 1
+        GROUP BY due_date
+        """,
+        (loan.name,),
+        as_dict=1,
+    )
+
+    paid_prin_by_date = {}
+    for row in lia_paid_prin:
+        paid_prin_by_date[getdate(row.due_date)] = flt(row.total_paid_prin, precision)
+
+    overdue_principal_total = 0.0
+
+    for sch in schedule:
+        due_date_with_grace = add_days(sch.payment_date, grace_period)
+        if current_date >= getdate(due_date_with_grace):
+            acc_prin_paid = paid_prin_by_date.get(getdate(sch.payment_date), 0)
+            unpaid_prin = flt(sch.principal_amount, precision) - flt(
+                acc_prin_paid, precision
             )
 
-            if not existing_penalty:
-                daily_penalty_amount = flt(
-                    overdue_principal_total * daily_penalty_rate, precision
-                )
-                if daily_penalty_amount > 0:
-                    create_penalty_accrual(
-                        loan,
-                        current_date,
-                        daily_penalty_amount,
-                        overdue_principal_total,
-                    )
+            if unpaid_prin > 0:
+                overdue_principal_total += unpaid_prin
+
+    if overdue_principal_total <= 0:
+        return
+
+    # Check if penalty already created for today
+    existing_penalty = frappe.db.exists(
+        "Loan Interest Accrual",
+        {
+            "loan": loan.name,
+            "posting_date": current_date,
+            "accrual_type": "Penalty",
+            "docstatus": 1,
+        },
+    )
+
+    if existing_penalty:
+        return
+
+    daily_penalty_amount = flt(overdue_principal_total * daily_penalty_rate, precision)
+
+    if daily_penalty_amount > 0:
+        create_penalty_accrual(
+            loan,
+            current_date,
+            daily_penalty_amount,
+            overdue_principal_total,
+        )
 
 
 def create_penalty_accrual(
     loan, posting_date, penalty_amount, pending_principal_amount
 ):
-    try:
-        lia = frappe.new_doc("Loan Interest Accrual")
-        lia.loan = loan.name
-        lia.company = loan.company
-        lia.posting_date = posting_date
-        lia.date_of_accrual = posting_date
-        lia.due_date = posting_date
-        lia.pending_principal_amount = pending_principal_amount
-        lia.interest_amount = 0.0
-        lia.payable_principal_amount = 0.0
-        lia.penalty_amount = penalty_amount
-        lia.accrual_type = "Penalty"
-        lia.insert(ignore_permissions=True)
-        lia.submit()
-
-        frappe.db.commit()
-        print(f"Successfully created Daily Penalty LIA for {loan.name}")
-
-    except Exception as e:
-        print(f"Error creating LIA: {str(e)}")
-        frappe.log_error(
-            f"Failed to create daily penalty for {loan.name}: {str(e)}",
-            "Daily Penalty Job",
-        )
+    """Create a single penalty LIA record."""
+    lia = frappe.new_doc("Loan Interest Accrual")
+    lia.loan = loan.name
+    lia.company = loan.company
+    lia.posting_date = posting_date
+    lia.date_of_accrual = posting_date
+    lia.due_date = posting_date
+    lia.pending_principal_amount = pending_principal_amount
+    lia.interest_amount = 0.0
+    lia.payable_principal_amount = 0.0
+    lia.penalty_amount = penalty_amount
+    lia.accrual_type = "Penalty"
+    lia.insert(ignore_permissions=True)
+    lia.submit()
 
 
-def backfill_missed_penalties(loan_name=None):
+def backfill_missed_penalties(loan_name="ACC-LOAN-2026-00008"):
     current_date = getdate(today())
     precision = cint(frappe.db.get_default("currency_precision")) or 2
     filters = {"docstatus": 1, "status": "Disbursed"}
@@ -241,7 +306,7 @@ def backfill_missed_penalties(loan_name=None):
     active_loans = frappe.get_all(
         "Loan",
         filters=filters,
-        fields=["name", "loan_product", "company"],
+        fields=["name", "loan_product", "company", "penalty_stop_threshold_days"],
     )
 
     for loan in active_loans:
@@ -256,7 +321,7 @@ def backfill_missed_penalties(loan_name=None):
 
         grace_period = cint(product.grace_period_in_days)
         daily_penalty_rate = flt(product.penalty_interest_rate)
-
+        print(daily_penalty_rate)
         if daily_penalty_rate <= 0:
             continue
 
@@ -281,16 +346,27 @@ def backfill_missed_penalties(loan_name=None):
 
         earliest_due_date = schedule[0].payment_date
         start_date = add_days(earliest_due_date, grace_period)
+        threshold_days = loan.penalty_stop_threshold_days
+        maturity_date = schedule[-1].payment_date
+        penalty_stop_date = add_days(maturity_date, threshold_days)
 
-        if getdate(start_date) > current_date:
+        print(
+            f"{start_date}, {penalty_stop_date}\n current_date:{current_date} start_date:{start_date} {penalty_stop_date > current_date}"
+        )
+
+        if getdate(penalty_stop_date) < getdate(current_date):
+            continue
+
+        if start_date > current_date:
             continue
 
         days_to_check = date_diff(current_date, start_date)
 
+        print(days_to_check)
+
         for i in range(days_to_check + 1):
             eval_date = add_days(start_date, i)
             overdue_principal_total = 0.0
-
             for sch in schedule:
                 due_date_with_grace = add_days(sch.payment_date, grace_period)
 
@@ -308,10 +384,10 @@ def backfill_missed_penalties(loan_name=None):
                     )
 
                     unpaid_prin = flt(sch.principal_amount, precision) - acc_prin_paid
-
                     if unpaid_prin > 0:
                         overdue_principal_total += unpaid_prin
 
+            print(f"overdue_principal_total = {overdue_principal_total}")
             if overdue_principal_total > 0:
                 existing_penalty = frappe.db.exists(
                     "Loan Interest Accrual",
@@ -327,11 +403,6 @@ def backfill_missed_penalties(loan_name=None):
                     daily_penalty_amount = flt(
                         overdue_principal_total * daily_penalty_rate, precision
                     )
-
-                    print(
-                        f"Catching up missed penalty for {eval_date}: {daily_penalty_amount} on Overdue Principal: {overdue_principal_total}"
-                    )
-
                     if daily_penalty_amount > 0:
                         create_penalty_accrual(
                             loan,

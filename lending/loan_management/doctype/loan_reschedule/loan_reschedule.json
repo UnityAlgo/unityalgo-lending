@@ -1,0 +1,260 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "naming_series:",
+ "creation": "2026-03-19 10:17:31.863534",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "amended_from",
+  "naming_series",
+  "loan",
+  "applicant_type",
+  "applicant",
+  "company",
+  "loan_product",
+  "posting_date",
+  "column_break_1",
+  "old_repayment_schedule",
+  "new_repayment_schedule",
+  "reason",
+  "section_break_outstanding",
+  "outstanding_principal",
+  "outstanding_interest",
+  "outstanding_penalty",
+  "column_break_2",
+  "capitalized_interest",
+  "capitalized_penalty",
+  "new_principal",
+  "section_break_new_terms",
+  "new_rate_of_interest",
+  "new_repayment_periods",
+  "new_repayment_start_date",
+  "column_break_3",
+  "new_repayment_method",
+  "new_monthly_repayment_amount",
+  "section_break_preview",
+  "schedule_preview"
+ ],
+ "fields": [
+  {
+   "default": "LM-RSC-.YYYY.-",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Naming Series",
+   "options": "LM-RSC-.YYYY.-",
+   "reqd": 1
+  },
+  {
+   "fieldname": "loan",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Loan",
+   "options": "Loan",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "loan.applicant_type",
+   "fieldname": "applicant_type",
+   "fieldtype": "Select",
+   "label": "Applicant Type",
+   "options": "Customer",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "loan.applicant",
+   "fieldname": "applicant",
+   "fieldtype": "Dynamic Link",
+   "label": "Applicant",
+   "options": "applicant_type",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "loan.company",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fetch_from": "loan.loan_product",
+   "fieldname": "loan_product",
+   "fieldtype": "Link",
+   "label": "Loan Product",
+   "options": "Loan Product",
+   "read_only": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "posting_date",
+   "fieldtype": "Date",
+   "label": "Posting Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "old_repayment_schedule",
+   "fieldtype": "Link",
+   "label": "Old Repayment Schedule",
+   "options": "Loan Repayment Schedule",
+   "read_only": 1
+  },
+  {
+   "fieldname": "new_repayment_schedule",
+   "fieldtype": "Link",
+   "label": "New Repayment Schedule",
+   "options": "Loan Repayment Schedule",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason for Rescheduling"
+  },
+  {
+   "fieldname": "section_break_outstanding",
+   "fieldtype": "Section Break",
+   "label": "Outstanding Balances (snapshot at reschedule time)"
+  },
+  {
+   "fieldname": "outstanding_principal",
+   "fieldtype": "Currency",
+   "label": "Outstanding Principal",
+   "read_only": 1
+  },
+  {
+   "fieldname": "outstanding_interest",
+   "fieldtype": "Currency",
+   "label": "Outstanding Interest",
+   "read_only": 1
+  },
+  {
+   "fieldname": "outstanding_penalty",
+   "fieldtype": "Currency",
+   "label": "Outstanding Penalty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "capitalized_interest",
+   "fieldtype": "Currency",
+   "label": "Interest Capitalized",
+   "read_only": 1
+  },
+  {
+   "fieldname": "capitalized_penalty",
+   "fieldtype": "Currency",
+   "label": "Penalty Capitalized",
+   "read_only": 1
+  },
+  {
+   "bold": 1,
+   "fieldname": "new_principal",
+   "fieldtype": "Currency",
+   "label": "New Principal Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_new_terms",
+   "fieldtype": "Section Break",
+   "label": "New Loan Terms"
+  },
+  {
+   "fieldname": "new_rate_of_interest",
+   "fieldtype": "Float",
+   "label": "New Rate of Interest (% per year)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "new_repayment_periods",
+   "fieldtype": "Int",
+   "label": "New Repayment Periods (months)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "new_repayment_start_date",
+   "fieldtype": "Date",
+   "label": "New Repayment Start Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Repay Over Number of Periods",
+   "fieldname": "new_repayment_method",
+   "fieldtype": "Select",
+   "label": "New Repayment Method",
+   "options": "Repay Over Number of Periods\nRepay Fixed Amount per Period",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.new_repayment_method == 'Repay Fixed Amount per Period'",
+   "fieldname": "new_monthly_repayment_amount",
+   "fieldtype": "Currency",
+   "label": "New Monthly Repayment Amount"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_preview",
+   "fieldtype": "Section Break",
+   "label": "New Schedule Preview"
+  },
+  {
+   "fieldname": "schedule_preview",
+   "fieldtype": "Table",
+   "label": "Schedule Preview",
+   "options": "Loan Reschedule Preview",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Loan Reschedule",
+   "print_hide": 1,
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-03-19 10:33:05.590532",
+ "modified_by": "Administrator",
+ "module": "Loan Management",
+ "name": "Loan Reschedule",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

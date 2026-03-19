@@ -56,7 +56,7 @@ class LoanRepaymentSchedule(Document):
                     balance_amount,
                 )
             )
-
+            
             total_interest_precise += interest_amount
 
             if (

@@ -25,6 +25,7 @@
   "repayment_schedule_type",
   "loan_amount",
   "rate_of_interest",
+  "penalty_stop_threshold_days",
   "is_secured_loan",
   "disbursement_date",
   "closure_date",
@@ -57,6 +58,8 @@
   "section_break_17",
   "total_payment",
   "total_principal_paid",
+  "total_interest_paid",
+  "total_penalty_paid",
   "written_off_amount",
   "refund_amount",
   "debit_adjustment_amount",
@@ -66,7 +69,9 @@
   "total_amount_paid",
   "is_npa",
   "manual_npa",
-  "amended_from"
+  "amended_from",
+  "section_break_mcea",
+  "repayment_schedule_name"
  ],
  "fields": [
   {
@@ -513,12 +518,49 @@
    "fieldtype": "Int",
    "label": "Overdue Days",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_break_mcea",
+   "fieldtype": "Section Break"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "repayment_schedule_name",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "repayment_schedule_name"
+  },
+  {
+   "fetch_from": "loan_product.rate_of_interest",
+   "fetch_if_empty": 1,
+   "fieldname": "penalty_stop_threshold_days",
+   "fieldtype": "Int",
+   "label": "Penalty Stop Threshold (Days)",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "total_interest_paid",
+   "fieldtype": "Currency",
+   "label": "Total Interest Paid",
+   "no_copy": 1,
+   "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_penalty_paid",
+   "fieldtype": "Currency",
+   "label": "Total Penalty Paid",
+   "no_copy": 1,
+   "options": "Company:company:default_currency",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-16 03:16:56.917666",
+ "modified": "2026-03-19 06:36:16.400489",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan",

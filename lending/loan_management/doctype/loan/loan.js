@@ -67,9 +67,87 @@ frappe.ui.form.on('Loan', {
 			frm.set_df_property("repayment_start_date", "label", "Interest Calculation Start Date");
 		}
 
-		if (frm.doc.docstatus == 1) {
-			frm.add_custom_button(__("Loan Repayments"), function () {
+		if (frm.doc.repayment_status === 'Past Maturity') {
+			frm.add_custom_button(__('Reschedule Loan'), function () {
+				frappe.call({
+					method: 'lending.loan_management.doctype.loan_reschedule.loan_reschedule.create_loan_reschedule',
+					args: {
+						loan_name: frm.doc.name,
+					},
+					callback: function (r) {
+						if (r.message) {
+							frappe.set_route('Form', 'Loan Reschedule', r.message);
+						}
+					}
+				});
+			}, __('Actions'));
+		}
 
+
+
+		if (
+			frm.doc.is_term_loan &&
+			frm.doc.status === "Disbursed"
+		) {
+			frm.add_custom_button(
+				__("Generate Penalties"),
+				function () {
+					frappe.confirm(
+						__(
+							"This will generate penalty accruals for all overdue dates that don't have one yet. Continue?"
+						),
+						function () {
+							frappe.call({
+								method: "lending.main.backfill_missed_penalties",
+								args: {
+									loan_name: frm.doc.name,
+								},
+								freeze: true,
+								freeze_message: __("Generating penalty accruals..."),
+								callback: function (r) {
+									if (r.message) {
+										var result = r.message;
+										if (result.total_created > 0) {
+											frappe.msgprint({
+												title: __("Penalties Generated"),
+												indicator: "green",
+												message: __(
+													"Created {0} penalty accrual(s) for {1}.",
+													[result.total_created, frm.doc.name]
+												),
+											});
+										} else {
+											frappe.msgprint({
+												title: __("No Penalties Needed"),
+												indicator: "blue",
+												message: __(
+													"All penalty dates are already covered. No new accruals created."
+												),
+											});
+										}
+										frm.reload_doc();
+									}
+								},
+							});
+						}
+					);
+				},
+				__("Testing Actions")
+			);
+		}
+
+		if (frm.doc.docstatus == 1) {
+			frm.add_custom_button(__("Accounting Ledger"), function () {
+				frappe.route_options = {
+					"against_voucher_no": frm.doc.name,
+					"from_date": frm.doc.posting_date,
+					"company": frm.doc.company
+				}
+
+				frappe.set_route("query-report", "General Ledger");
+			}, "View")
+
+			frm.add_custom_button(__("Loan Repayments"), function () {
 				frappe.route_options = {
 					"loan": frm.doc.name
 				}
@@ -78,7 +156,8 @@ frappe.ui.form.on('Loan', {
 
 			frm.add_custom_button(__("Borrower Statement"), function () {
 				frappe.route_options = {
-					"customer": frm.doc.applicant
+					"customer": frm.doc.applicant,
+					"loan": frm.doc.name
 				}
 				frappe.set_route("query-report", "Borrower Statement");
 			}, "View")

@@ -531,6 +531,7 @@
    "label": "repayment_schedule_name"
   },
   {
+   "allow_on_submit": 1,
    "fetch_from": "loan_product.rate_of_interest",
    "fetch_if_empty": 1,
    "fieldname": "penalty_stop_threshold_days",
@@ -560,7 +561,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-19 06:36:16.400489",
+ "modified": "2026-03-21 14:04:52.407701",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan",

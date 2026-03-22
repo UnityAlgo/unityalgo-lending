@@ -9,6 +9,14 @@ frappe.ui.form.on('Loan Repayment', {
 		if (frappe.meta.has_field("Loan Repayment", "repay_from_salary")) {
 			frm.add_fetch("against_loan", "repay_from_salary", "repay_from_salary");
 		}
+
+		frm.add_fetch("against_loan", "is_term_loan", "is_term_loan");
+		frm.add_fetch("against_loan", "rate_of_interest", "rate_of_interest");
+		frm.add_fetch("against_loan", "loan_account", "loan_account");
+		frm.add_fetch("against_loan", "payment_account", "payment_account");
+		frm.add_fetch("against_loan", "penalty_income_account", "penalty_income_account");
+		frm.add_fetch("against_loan", "is_npa", "is_npa");
+		frm.add_fetch("against_loan", "manual_npa", "manual_npa");
 	},
 
 	onload: function (frm) {
@@ -43,32 +51,35 @@ frappe.ui.form.on('Loan Repayment', {
 			frm.trigger('calculate_repayment_amounts');
 		}
 	},
-
 	calculate_repayment_amounts: function (frm) {
 		frappe.call({
 			method: 'lending.loan_management.doctype.loan_repayment.loan_repayment.calculate_amounts',
 			args: {
 				'against_loan': frm.doc.against_loan,
 				'posting_date': frm.doc.posting_date,
-				// FIX: Read from repayment_type (the actual doctype field),
-				// not payment_type which doesn't exist on the form
 				'payment_type': frm.doc.repayment_type || ''
 			},
 			callback: function (r) {
 				let amounts = r.message;
-				console.warn(amounts)
-				frm.set_value('amount_paid', 0.0);
-				frm.set_df_property('amount_paid', 'read_only', frm.doc.repayment_type == "Loan Closure" ? 1 : 0);
-
 				frm.set_value('pending_principal_amount', amounts['pending_principal_amount']);
-				if (frm.doc.is_term_loan || frm.doc.repayment_type == "Loan Closure") {
-					frm.set_value('payable_principal_amount', amounts['payable_principal_amount']);
-					frm.set_value('amount_paid', amounts['payable_amount']);
-				}
 				frm.set_value('interest_payable', amounts['interest_amount']);
 				frm.set_value('penalty_amount', amounts['penalty_amount']);
 				frm.set_value('payable_amount', amounts['payable_amount']);
 				frm.set_value('total_charges_payable', amounts['total_charges_payable']);
+
+				frm.set_value('payable_principal_amount', amounts['payable_principal_amount']);
+
+				if (frm.doc.repayment_type == "Loan Closure") {
+					frm.set_value('amount_paid', amounts['payable_amount']);
+					frm.set_df_property('amount_paid', 'read_only', 1);
+
+				} else if (frm.doc.is_term_loan && amounts['payable_amount'] > 0) {
+					frm.set_value('amount_paid', amounts['payable_amount']);
+					frm.set_df_property('amount_paid', 'read_only', 0);
+				} else {
+					frm.set_value('amount_paid', 0.0);
+					frm.set_df_property('amount_paid', 'read_only', 0);
+				}
 
 				if (amounts["charges"]) {
 					frm.clear_table("pending_charges");
@@ -79,7 +90,6 @@ frappe.ui.form.on('Loan Repayment', {
 					})
 					frm.refresh_field('pending_charges');
 				}
-
 			}
 		});
 	}

@@ -17,6 +17,9 @@
   "column_break_1",
   "old_repayment_schedule",
   "new_repayment_schedule",
+  "capitalization_jv",
+  "settled_penalty_snapshot",
+  "settled_interest_snapshot",
   "reason",
   "section_break_outstanding",
   "outstanding_principal",
@@ -196,6 +199,7 @@
    "fieldtype": "Select",
    "label": "New Repayment Method",
    "options": "Repay Over Number of Periods\nRepay Fixed Amount per Period",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -225,13 +229,34 @@
    "options": "Loan Reschedule",
    "print_hide": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "capitalization_jv",
+   "fieldtype": "Link",
+   "label": "Capitalization Journal Entry",
+   "options": "Journal Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "settled_penalty_snapshot",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Settled Penalty Snapshot",
+   "read_only": 1
+  },
+  {
+   "fieldname": "settled_interest_snapshot",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Settled Interest Snapshot",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-19 10:33:05.590532",
+ "modified": "2026-03-22 11:37:06.274712",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Reschedule",

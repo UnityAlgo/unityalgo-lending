@@ -26,7 +26,6 @@ class LoanReschedule(Document):
         self.reverse_reschedule()
 
     def validate_loan_eligibility(self):
-        """Ensure the loan is actually eligible for rescheduling."""
         loan = frappe.get_doc("Loan", self.loan)
 
         if loan.status == "Closed":
@@ -35,14 +34,9 @@ class LoanReschedule(Document):
         if not loan.is_term_loan:
             frappe.throw(_("Rescheduling is only supported for term loans."))
 
-        # Check for existing active reschedule (prevent double-reschedule)
         existing = frappe.db.exists(
             "Loan Reschedule",
-            {
-                "loan": self.loan,
-                "docstatus": 1,
-                "name": ["!=", self.name],
-            },
+            {"loan": self.loan, "docstatus": 1, "name": ["!=", self.name]},
         )
         if existing:
             frappe.throw(
@@ -51,12 +45,7 @@ class LoanReschedule(Document):
                 ).format(self.loan, existing)
             )
 
-        # Find the active schedule
-        schedule_id = frappe.db.get_value(
-            "Loan Repayment Schedule",
-            {"loan": self.loan, "docstatus": 1},
-            "name",
-        )
+        schedule_id = get_active_schedule(self.loan)
         if not schedule_id:
             frappe.throw(
                 _("No active repayment schedule found for loan {0}.").format(self.loan)
@@ -65,14 +54,9 @@ class LoanReschedule(Document):
         self.old_repayment_schedule = schedule_id
 
     def snapshot_outstanding_balances(self):
-        """Capture exactly what's owed right now — principal, interest, penalty."""
         precision = cint(frappe.db.get_default("currency_precision")) or 2
         loan = frappe.get_doc("Loan", self.loan)
-
-        # 1. Outstanding principal — from loan doc
         self.outstanding_principal = flt(get_pending_principal_amount(loan), precision)
-
-        # 2. Outstanding interest — sum of unpaid interest from LIA records
         total_interest_accrued = flt(
             frappe.db.get_value(
                 "Loan Interest Accrual",
@@ -91,13 +75,10 @@ class LoanReschedule(Document):
             or 0,
             precision,
         )
-        self.outstanding_interest = flt(
-            total_interest_accrued - total_interest_paid, precision
+        self.outstanding_interest = max(
+            flt(total_interest_accrued - total_interest_paid, precision), 0
         )
-        if self.outstanding_interest < 0:
-            self.outstanding_interest = 0
 
-        # 3. Outstanding penalty — sum of unpaid penalty from LIA records
         total_penalty_accrued = flt(
             frappe.db.get_value(
                 "Loan Interest Accrual",
@@ -116,19 +97,14 @@ class LoanReschedule(Document):
             or 0,
             precision,
         )
-        self.outstanding_penalty = flt(
-            total_penalty_accrued - total_penalty_paid, precision
+        self.outstanding_penalty = max(
+            flt(total_penalty_accrued - total_penalty_paid, precision), 0
         )
-        if self.outstanding_penalty < 0:
-            self.outstanding_penalty = 0
 
     def compute_new_principal(self):
-        """Capitalize interest and penalty into new principal."""
         precision = cint(frappe.db.get_default("currency_precision")) or 2
-
         self.capitalized_interest = flt(self.outstanding_interest, precision)
         self.capitalized_penalty = flt(self.outstanding_penalty, precision)
-
         self.new_principal = flt(
             self.outstanding_principal
             + self.capitalized_interest
@@ -137,9 +113,7 @@ class LoanReschedule(Document):
         )
 
     def generate_schedule_preview(self):
-        """Build the amortization table for preview before submission."""
         precision = cint(frappe.db.get_default("currency_precision")) or 2
-
         self.set("schedule_preview", [])
 
         balance = flt(self.new_principal, precision)
@@ -168,7 +142,6 @@ class LoanReschedule(Document):
             interest_amount = flt(balance * rate / (12 * 100), precision)
             principal_amount = flt(monthly_repayment - interest_amount, precision)
 
-            # Last row adjustment
             if principal_amount > balance:
                 principal_amount = balance
 
@@ -191,45 +164,112 @@ class LoanReschedule(Document):
             )
 
             payment_date = add_single_month(payment_date)
-
             if balance <= 0:
                 break
 
     def execute_reschedule(self):
-        """The main operation — expire old schedule, create new one, update loan."""
         precision = cint(frappe.db.get_default("currency_precision")) or 2
 
         # ===================================
-        # STEP 1: Cancel the old schedule
+        # STEP 1: Mark old schedule as "Superseded"
         # ===================================
-        old_schedule = frappe.get_doc(
-            "Loan Repayment Schedule", self.old_repayment_schedule
+        frappe.db.set_value(
+            "Loan Repayment Schedule",
+            self.old_repayment_schedule,
+            "status",
+            "Superseded",
         )
-        old_schedule.flags.ignore_permissions = True
-        old_schedule.cancel()
 
         # ===================================
-        # STEP 2: Create capitalization entries
+        # STEP 2: Create capitalization Journal Entry
         # ===================================
-        # Create adjustment LIAs to mark the outstanding interest/penalty as "settled"
-        # (they're being rolled into principal, not actually paid)
+        # This is the KEY accounting entry. It reclassifies the outstanding
+        # interest and penalty from their receivable accounts into the
+        # Loan Account, effectively converting them into principal.
+        #
+        # Before:
+        #   Loan Account DR 32,000 (borrower owes principal)
+        #   Interest Receivable DR 2,710 (borrower owes interest)
+        #   Penalty Receivable DR 60,000 (borrower owes penalty)
+        #
+        # After this JV:
+        #   Loan Account DR 94,710 (all debt consolidated into principal)
+        #   Interest Receivable DR 0 (cleared)
+        #   Penalty Receivable DR 0 (cleared)
+        #
+        # Journal Entry:
+        #   DR Loan Account           62,710 (increase principal)
+        #   CR Interest Receivable      2,710 (clear interest debt)
+        #   CR Penalty Receivable      60,000 (clear penalty debt)
+        capitalization_total = flt(
+            self.capitalized_interest + self.capitalized_penalty, precision
+        )
+
+        if capitalization_total > 0:
+            jv = self._create_capitalization_jv()
+            self.db_set("capitalization_jv", jv.name)
+
+        # ===================================
+        # STEP 3: Mark outstanding LIA interest/penalty as paid
+        # ===================================
+        # The JV cleared the GL balances. Now update the LIA records
+        # so get_amounts() and allocate_amounts() don't see them as outstanding.
         if self.capitalized_interest > 0:
-            self._create_capitalization_lia(
-                interest_amount=self.capitalized_interest,
-                penalty_amount=0,
-                label="Interest Capitalization",
-            )
+            self._settle_outstanding_interest()
 
         if self.capitalized_penalty > 0:
-            self._create_capitalization_lia(
-                interest_amount=0,
-                penalty_amount=self.capitalized_penalty,
-                label="Penalty Capitalization",
-            )
+            self._settle_outstanding_penalty()
 
         # ===================================
-        # STEP 3: Create new repayment schedule
+        # STEP 4: Update the Loan document FIRST
         # ===================================
+        # Must happen BEFORE creating the new schedule because
+        # Loan Repayment Schedule.set_missing_fields() reads loan_amount
+        # from the Loan doc to calculate monthly_repayment_amount.
+        new_total_payment = sum(
+            flt(r.total_payment, precision) for r in self.get("schedule_preview")
+        )
+        new_total_interest = sum(
+            flt(r.interest_amount, precision) for r in self.get("schedule_preview")
+        )
+
+        # Calculate the monthly repayment from the preview
+        num_rows = len(self.get("schedule_preview"))
+        monthly_repayment = (
+            flt(new_total_payment / num_rows, precision) if num_rows else 0
+        )
+
+        loan_update = {
+            "total_payment": flt(new_total_payment, precision),
+            "total_interest_payable": flt(new_total_interest, precision),
+            "rate_of_interest": self.new_rate_of_interest,
+            "repayment_periods": self.new_repayment_periods,
+            "repayment_method": self.new_repayment_method,
+            "loan_amount": flt(self.new_principal, precision),
+            "disbursed_amount": flt(self.new_principal, precision),
+            "monthly_repayment_amount": monthly_repayment,
+            "total_principal_paid": 0,
+            "total_amount_paid": 0,
+            "status": "Disbursed",
+            "repayment_status": "Regular",
+            "overdue_days": 0,
+        }
+
+        if frappe.db.has_column("Loan", "total_interest_paid"):
+            loan_update["total_interest_paid"] = 0
+        if frappe.db.has_column("Loan", "total_penalty_paid"):
+            loan_update["total_penalty_paid"] = 0
+
+        if self.new_repayment_method == "Repay Fixed Amount per Period":
+            loan_update["monthly_repayment_amount"] = self.new_monthly_repayment_amount
+
+        frappe.db.set_value("Loan", self.loan, loan_update)
+
+        # ===================================
+        # STEP 5: Create new repayment schedule
+        # ===================================
+        # Now the Loan doc has the correct loan_amount, so
+        # set_missing_fields() won't fail.
         new_schedule = frappe.new_doc("Loan Repayment Schedule")
         new_schedule.loan = self.loan
         new_schedule.loan_product = self.loan_product
@@ -237,11 +277,13 @@ class LoanReschedule(Document):
         new_schedule.repayment_periods = self.new_repayment_periods
         new_schedule.rate_of_interest = self.new_rate_of_interest
         new_schedule.repayment_start_date = self.new_repayment_start_date
+        new_schedule.status = "Active"
+        new_schedule.loan_amount = flt(self.new_principal, precision)
+        new_schedule.monthly_repayment_amount = monthly_repayment
 
         if self.new_repayment_method == "Repay Fixed Amount per Period":
             new_schedule.monthly_repayment_amount = self.new_monthly_repayment_amount
 
-        # Copy rows from preview into the actual schedule
         for row in self.get("schedule_preview"):
             new_schedule.append(
                 "repayment_schedule",
@@ -261,122 +303,249 @@ class LoanReschedule(Document):
 
         self.db_set("new_repayment_schedule", new_schedule.name)
 
-        # ===================================
-        # STEP 4: Update the Loan document
-        # ===================================
-        new_total_payment = sum(
-            flt(r.total_payment, precision) for r in self.get("schedule_preview")
+        frappe.db.set_value(
+            "Loan", self.loan, {"repayment_schedule_name": new_schedule.name}
         )
-        new_total_interest = sum(
-            flt(r.interest_amount, precision) for r in self.get("schedule_preview")
-        )
-
-        loan_update = {
-            "total_payment": flt(new_total_payment, precision),
-            "total_interest_payable": flt(new_total_interest, precision),
-            "rate_of_interest": self.new_rate_of_interest,
-            "repayment_periods": self.new_repayment_periods,
-            "repayment_method": self.new_repayment_method,
-            "loan_amount": flt(self.new_principal, precision),
-            "disbursed_amount": flt(self.new_principal, precision),
-            "total_principal_paid": 0,
-            "total_amount_paid": 0,
-            "status": "Disbursed",
-            "repayment_status": "Regular",
-            "overdue_days": 0,
-        }
-
-        # Reset interest/penalty paid tracking if those columns exist
-        if frappe.db.has_column("Loan", "total_interest_paid"):
-            loan_update["total_interest_paid"] = 0
-        if frappe.db.has_column("Loan", "total_penalty_paid"):
-            loan_update["total_penalty_paid"] = 0
-
-        if self.new_repayment_method == "Repay Fixed Amount per Period":
-            loan_update["monthly_repayment_amount"] = self.new_monthly_repayment_amount
-
-        frappe.db.set_value("Loan", self.loan, loan_update)
-
         frappe.msgprint(
-            _("Loan {0} has been rescheduled successfully. New schedule: {1}").format(
+            _("Loan {0} rescheduled. New schedule: {1}").format(
                 self.loan, new_schedule.name
             ),
             alert=True,
             indicator="green",
         )
 
-    def _create_capitalization_lia(self, interest_amount, penalty_amount, label):
-        """Create an LIA that marks outstanding amounts as 'settled via capitalization'.
+    def _create_capitalization_jv(self):
+        """Create a Journal Entry that reclassifies interest + penalty into principal.
 
-        These are fully-paid-on-creation LIAs — the interest/penalty is not being
-        paid with cash, it's being absorbed into the new principal. We create them
-        with paid_amount = accrued_amount so they don't show as outstanding.
+        DR Loan Account              (capitalized_interest + capitalized_penalty)
+        CR Interest Receivable       (capitalized_interest)
+        CR Penalty Receivable        (capitalized_penalty)
         """
-        lia = frappe.new_doc("Loan Interest Accrual")
-        lia.loan = self.loan
-        lia.company = self.company
-        lia.posting_date = self.posting_date
-        lia.date_of_accrual = self.posting_date
-        lia.due_date = self.posting_date
-        lia.interest_amount = flt(interest_amount)
-        lia.paid_interest_amount = flt(interest_amount)  # Fully settled
-        lia.payable_principal_amount = 0
-        lia.paid_principal_amount = 0
-        lia.penalty_amount = flt(penalty_amount)
-        lia.accrual_type = "Capitalization"
-        lia.flags.ignore_permissions = True
-        lia.insert()
-        lia.submit()
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
+
+        loan_doc = frappe.get_doc("Loan", self.loan)
+        loan_product = frappe.db.get_value(
+            "Loan Product",
+            self.loan_product,
+            ["interest_receivable_account", "penalty_receivable_account"],
+            as_dict=1,
+        )
+
+        jv = frappe.new_doc("Journal Entry")
+        jv.voucher_type = "Journal Entry"
+        jv.posting_date = self.posting_date
+        jv.company = self.company
+        jv.remark = _(
+            "Loan Reschedule: Capitalization of interest and penalty into principal for {0}"
+        ).format(self.loan)
+        jv.loan = self.loan
+
+        capitalization_total = flt(
+            self.capitalized_interest + self.capitalized_penalty, precision
+        )
+
+        # DR Loan Account (increase principal balance)
+        jv.append(
+            "accounts",
+            {
+                "account": loan_doc.loan_account,
+                "debit_in_account_currency": capitalization_total,
+                "credit_in_account_currency": 0,
+                "party_type": self.applicant_type,
+                "party": self.applicant,
+                "against_account": loan_product.interest_receivable_account,
+                "reference_type": "Loan",
+                "reference_name": self.loan,
+            },
+        )
+
+        # CR Interest Receivable (clear outstanding interest)
+        if self.capitalized_interest > 0:
+            jv.append(
+                "accounts",
+                {
+                    "account": loan_product.interest_receivable_account,
+                    "debit_in_account_currency": 0,
+                    "credit_in_account_currency": flt(
+                        self.capitalized_interest, precision
+                    ),
+                    "party_type": self.applicant_type,
+                    "party": self.applicant,
+                    "against_account": loan_doc.loan_account,
+                    "reference_type": "Loan",
+                    "reference_name": self.loan,
+                },
+            )
+
+        # CR Penalty Receivable (clear outstanding penalty)
+        if self.capitalized_penalty > 0:
+            jv.append(
+                "accounts",
+                {
+                    "account": loan_product.penalty_receivable_account,
+                    "debit_in_account_currency": 0,
+                    "credit_in_account_currency": flt(
+                        self.capitalized_penalty, precision
+                    ),
+                    "party_type": self.applicant_type,
+                    "party": self.applicant,
+                    "against_account": loan_doc.loan_account,
+                    "reference_type": "Loan",
+                    "reference_name": self.loan,
+                },
+            )
+
+        jv.flags.ignore_permissions = True
+        jv.insert()
+        jv.submit()
+
+        return jv
+
+    def _settle_outstanding_interest(self):
+        """Mark ALL non-penalty LIAs as fully paid so they don't appear as outstanding.
+
+        get_accrued_interest_entries() returns LIAs where EITHER:
+          interest_amount - paid_interest_amount > 0
+          OR payable_principal_amount - paid_principal_amount > 0
+
+        We must settle BOTH sides. Otherwise the old LIAs still appear as
+        pending and allocate_amounts() maps new repayments against them
+        instead of the new schedule.
+
+        We store originals for reversal.
+        """
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
+
+        unsettled_lias = frappe.db.sql(
+            """
+            SELECT name, interest_amount, paid_interest_amount,
+                   payable_principal_amount, paid_principal_amount
+            FROM `tabLoan Interest Accrual`
+            WHERE loan = %s AND docstatus = 1
+              AND accrual_type != 'Penalty'
+              AND (
+                ROUND(interest_amount - IFNULL(paid_interest_amount, 0), %s) > 0
+                OR ROUND(IFNULL(payable_principal_amount, 0) - IFNULL(paid_principal_amount, 0), %s) > 0
+              )
+            """,
+            (self.loan, precision, precision),
+            as_dict=1,
+        )
+
+        # Store originals for reversal
+        originals = {}
+        for lia in unsettled_lias:
+            originals[lia.name] = {
+                "paid_interest_amount": flt(lia.paid_interest_amount, precision),
+                "paid_principal_amount": flt(lia.paid_principal_amount, precision),
+            }
+
+        self.db_set("settled_interest_snapshot", frappe.as_json(originals))
+
+        for lia in unsettled_lias:
+            frappe.db.set_value(
+                "Loan Interest Accrual",
+                lia.name,
+                {
+                    "paid_interest_amount": flt(lia.interest_amount, precision),
+                    "paid_principal_amount": flt(
+                        lia.payable_principal_amount, precision
+                    ),
+                },
+            )
+
+    def _settle_outstanding_penalty(self):
+        """Zero out penalty_amount on old penalty LIAs so get_amounts() stops counting them.
+
+        The GL side is handled by the capitalization JV (CR Penalty Receivable).
+        But get_amounts() reads penalty_amount from LIA records directly.
+        We zero them out here and store the originals as JSON for reversal.
+        """
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
+
+        penalty_lias = frappe.db.sql(
+            """
+            SELECT name, penalty_amount
+            FROM `tabLoan Interest Accrual`
+            WHERE loan = %s AND docstatus = 1
+              AND accrual_type = 'Penalty'
+              AND ROUND(penalty_amount, %s) > 0
+            """,
+            (self.loan, precision),
+            as_dict=1,
+        )
+
+        # Store originals for reversal
+        originals = {
+            lia.name: flt(lia.penalty_amount, precision) for lia in penalty_lias
+        }
+        self.db_set("settled_penalty_snapshot", frappe.as_json(originals))
+
+        for lia in penalty_lias:
+            frappe.db.set_value(
+                "Loan Interest Accrual",
+                lia.name,
+                "penalty_amount",
+                0,
+            )
+
+    def _restore_penalty_amounts(self):
+        """Restore penalty_amount on LIAs that were zeroed during reschedule."""
+        snapshot_json = self.get("settled_penalty_snapshot")
+        if not snapshot_json:
+            return
+
+        originals = frappe.parse_json(snapshot_json)
+        for lia_name, original_amount in originals.items():
+            if frappe.db.exists("Loan Interest Accrual", lia_name):
+                frappe.db.set_value(
+                    "Loan Interest Accrual",
+                    lia_name,
+                    "penalty_amount",
+                    flt(original_amount),
+                )
 
     def reverse_reschedule(self):
-        """Undo the reschedule — restore old schedule, cancel new one."""
+        # 1. Cancel the capitalization JV
+        if self.get("capitalization_jv"):
+            jv_doc = frappe.get_doc("Journal Entry", self.capitalization_jv)
+            if jv_doc.docstatus == 1:
+                jv_doc.flags.ignore_permissions = True
+                jv_doc.cancel()
 
-        # 1. Cancel the new schedule if it exists
+        # 2. Cancel new schedule
         if self.new_repayment_schedule:
-            new_schedule = frappe.get_doc(
-                "Loan Repayment Schedule", self.new_repayment_schedule
+            new_sched_status = frappe.db.get_value(
+                "Loan Repayment Schedule", self.new_repayment_schedule, "docstatus"
             )
-            if new_schedule.docstatus == 1:
+            if new_sched_status == 1:
+                new_schedule = frappe.get_doc(
+                    "Loan Repayment Schedule", self.new_repayment_schedule
+                )
+                new_schedule.ignore_linked_doctypes = [
+                    "Loan",
+                    "Loan Interest Accrual",
+                    "Loan Repayment",
+                ]
                 new_schedule.flags.ignore_permissions = True
                 new_schedule.cancel()
 
-        # 2. Restore (amend) the old schedule
+        # 3. Restore old schedule to Active
         if self.old_repayment_schedule:
-            old_schedule = frappe.get_doc(
-                "Loan Repayment Schedule", self.old_repayment_schedule
-            )
-            if old_schedule.docstatus == 2:
-                # Re-create from the cancelled version
-                amended = frappe.copy_doc(old_schedule)
-                amended.amended_from = old_schedule.name
-                amended.flags.ignore_permissions = True
-                amended.insert()
-                amended.submit()
+            if frappe.db.exists("Loan Repayment Schedule", self.old_repayment_schedule):
+                frappe.db.set_value(
+                    "Loan Repayment Schedule",
+                    self.old_repayment_schedule,
+                    "status",
+                    "Active",
+                )
 
-        # 3. Cancel capitalization LIAs created by this reschedule
-        cap_lias = frappe.get_all(
-            "Loan Interest Accrual",
-            filters={
-                "loan": self.loan,
-                "posting_date": self.posting_date,
-                "accrual_type": "Capitalization",
-                "docstatus": 1,
-            },
-            fields=["name"],
-        )
-        for lia in cap_lias:
-            lia_doc = frappe.get_doc("Loan Interest Accrual", lia.name)
-            lia_doc.flags.ignore_permissions = True
-            lia_doc.cancel()
+        # 4. Restore LIA paid amounts and penalty amounts
+        self._restore_lia_paid_amounts()
+        self._restore_penalty_amounts()
 
-        # 4. Restore original loan values
-        # We need to recalculate from the restored schedule
-        loan = frappe.get_doc("Loan", self.loan)
-        restored_schedule_id = frappe.db.get_value(
-            "Loan Repayment Schedule",
-            {"loan": self.loan, "docstatus": 1},
-            "name",
-        )
+        # 5. Restore loan values from the old schedule
+        restored_schedule_id = get_active_schedule(self.loan)
 
         if restored_schedule_id:
             rows = frappe.get_all(
@@ -404,9 +573,52 @@ class LoanReschedule(Document):
             indicator="orange",
         )
 
+    def _restore_lia_paid_amounts(self):
+        """Restore paid_interest_amount and paid_principal_amount from snapshot."""
+        snapshot_json = self.get("settled_interest_snapshot")
+        if not snapshot_json:
+            return
+
+        originals = frappe.parse_json(snapshot_json)
+        for lia_name, original_vals in originals.items():
+            if frappe.db.exists("Loan Interest Accrual", lia_name):
+                frappe.db.set_value(
+                    "Loan Interest Accrual",
+                    lia_name,
+                    {
+                        "paid_interest_amount": flt(
+                            original_vals.get("paid_interest_amount", 0)
+                        ),
+                        "paid_principal_amount": flt(
+                            original_vals.get("paid_principal_amount", 0)
+                        ),
+                    },
+                )
+
+
+def get_active_schedule(loan_name):
+    """Find the active (non-superseded) repayment schedule for a loan."""
+    schedule_id = frappe.db.get_value(
+        "Loan Repayment Schedule",
+        {"loan": loan_name, "docstatus": 1, "status": "Active"},
+        "name",
+    )
+
+    if schedule_id:
+        return schedule_id
+
+    # Fallback for legacy data without status
+    schedule_id = frappe.db.get_value(
+        "Loan Repayment Schedule",
+        {"loan": loan_name, "docstatus": 1},
+        "name",
+        order_by="creation desc",
+    )
+
+    return schedule_id
+
 
 def get_pending_principal_amount(loan):
-    """Reuse the same logic from loan_repayment.py"""
     precision = cint(frappe.db.get_default("currency_precision")) or 2
     if (
         loan.status in ("Disbursed", "Closed")
@@ -434,23 +646,15 @@ def get_pending_principal_amount(loan):
     return flt(pending, precision)
 
 
-# =============================================================================
-# WHITELISTED API: Called from the Loan form button
-# =============================================================================
 @frappe.whitelist()
 def create_loan_reschedule(loan_name):
-    """Create a draft Loan Reschedule document from a Loan.
-    Called by the 'Reschedule Loan' button on the Loan form.
-    """
     loan = frappe.get_doc("Loan", loan_name)
 
     if loan.status == "Closed":
         frappe.throw(_("Cannot reschedule a closed loan."))
-
     if not loan.is_term_loan:
         frappe.throw(_("Rescheduling is only supported for term loans."))
 
-    # Pre-fill with current loan terms as defaults
     rsc = frappe.new_doc("Loan Reschedule")
     rsc.loan = loan.name
     rsc.applicant_type = loan.applicant_type
@@ -458,26 +662,17 @@ def create_loan_reschedule(loan_name):
     rsc.company = loan.company
     rsc.loan_product = loan.loan_product
     rsc.posting_date = today()
-
-    # Default new terms from current loan
     rsc.new_rate_of_interest = loan.rate_of_interest
-    rsc.new_repayment_periods = 12  # Default to 12 months, user can adjust
+    rsc.new_repayment_periods = 12
     rsc.new_repayment_start_date = add_months(getdate(today()), 1)
     rsc.new_repayment_method = loan.repayment_method or "Repay Over Number of Periods"
-
     rsc.insert()
-
     return rsc.name
 
 
-# =============================================================================
-# BATCH UTILITY: Find all loans eligible for rescheduling
-# =============================================================================
 @frappe.whitelist()
 def get_loans_eligible_for_reschedule():
-    """Return loans that are past maturity + penalty_stop_threshold_days."""
     current_date = getdate(today())
-
     eligible_loans = []
 
     active_loans = frappe.get_all(
@@ -496,12 +691,7 @@ def get_loans_eligible_for_reschedule():
     )
 
     for loan in active_loans:
-        # Find the maturity date from the schedule
-        schedule_id = frappe.db.get_value(
-            "Loan Repayment Schedule",
-            {"loan": loan.name, "docstatus": 1},
-            "name",
-        )
+        schedule_id = get_active_schedule(loan.name)
         if not schedule_id:
             continue
 

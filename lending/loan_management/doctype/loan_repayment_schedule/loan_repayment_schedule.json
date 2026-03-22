@@ -31,6 +31,7 @@
    "fieldname": "loan",
    "fieldtype": "Link",
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Loan",
    "options": "Loan",
    "reqd": 1
@@ -84,12 +85,14 @@
    "fieldtype": "Select",
    "hidden": 1,
    "label": "Status",
-   "options": "Initiated\nRejected\nActive\nRestructured\nDraft\nCancelled"
+   "options": "Initiated\nRejected\nActive\nRestructured\nDraft\nCancelled\nSuperseded"
   },
   {
    "fetch_if_empty": 1,
    "fieldname": "repayment_start_date",
    "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Repayment Start Date",
    "read_only": 1
   },
@@ -113,6 +116,7 @@
    "fetch_if_empty": 1,
    "fieldname": "repayment_periods",
    "fieldtype": "Int",
+   "in_list_view": 1,
    "label": "Repayment Period In Months",
    "read_only": 1
   },
@@ -152,7 +156,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-11 05:06:03.697996",
+ "modified": "2026-03-22 10:52:47.617888",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Repayment Schedule",

@@ -29,7 +29,9 @@ from lending.loan_management.doctype.process_loan_interest_accrual.process_loan_
 
 class LoanRepayment(AccountsController):
     def validate(self):
-        amounts = calculate_amounts(self.against_loan, self.posting_date)
+        amounts = calculate_amounts(
+            self.against_loan, self.posting_date, self.repayment_type
+        )
         self.add_pending_charges()
         self.set_missing_values(amounts)
         self.check_future_entries()
@@ -1881,28 +1883,25 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
 
     if against_loan_doc.is_term_loan:
         # ================================================================
-        # FIX 1: Get ACTUAL paid amounts from LIA records (source of truth)
-        # instead of potentially stale Loan doc summary fields
+        # FIX 1: Use Loan doc totals for paid amounts
         # ================================================================
-        total_prin_paid = flt(
-            frappe.db.get_value(
-                "Loan Interest Accrual",
-                {"loan": against_loan, "docstatus": 1},
-                "sum(paid_principal_amount)",
-            )
-            or 0,
-            precision,
-        )
+        # After reschedule, the Loan doc is reset to total_principal_paid=0,
+        # total_interest_paid=0. These are correct and incremented by each
+        # subsequent repayment in update_paid_amount().
+        #
+        # We CANNOT use sum(paid_*) from LIA records because after reschedule,
+        # old LIAs are artificially settled (paid_*=accrued_*) which inflates
+        # the totals and makes cumulative_prin - total_prin_paid go negative.
+        #
+        # The Loan doc fields ARE up-to-date when get_amounts() runs during
+        # validate() because the previous repayment's on_submit already
+        # committed the updated values.
+        # ================================================================
+        total_prin_paid = flt(against_loan_doc.total_principal_paid, precision)
 
-        total_int_paid = flt(
-            frappe.db.get_value(
-                "Loan Interest Accrual",
-                {"loan": against_loan, "docstatus": 1},
-                "sum(paid_interest_amount)",
-            )
-            or 0,
-            precision,
-        )
+        total_int_paid = 0.0
+        if hasattr(against_loan_doc, "total_interest_paid"):
+            total_int_paid = flt(against_loan_doc.total_interest_paid, precision)
 
         # For penalty paid, use Loan Repayment records as source of truth
         total_pen_paid = flt(
@@ -1916,7 +1915,9 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
         )
 
         schedule_id = frappe.db.get_value(
-            "Loan Repayment Schedule", {"loan": against_loan, "docstatus": 1}, "name"
+            "Loan Repayment Schedule",
+            {"loan": against_loan, "docstatus": 1, "status": "Active"},
+            "name",
         )
 
         if schedule_id:
@@ -1960,18 +1961,31 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
             grace_period = cint(loan_product_details.grace_period_in_days)
 
             # A) Get exactly what was locked in historically by the daily background job
+            # Exclude zeroed-out LIAs (penalty_amount set to 0 by reschedule)
             billed_penalty = flt(
                 frappe.db.get_value(
                     "Loan Interest Accrual",
-                    {"loan": against_loan, "docstatus": 1, "accrual_type": "Penalty"},
+                    {
+                        "loan": against_loan,
+                        "docstatus": 1,
+                        "accrual_type": "Penalty",
+                        "penalty_amount": [">", 0],
+                    },
                     "sum(penalty_amount)",
                 )
             )
 
             # B) Time machine for unbilled gap
+            # Only look at penalty LIAs that still have penalty_amount > 0
+            # (zeroed-out ones from reschedule should be ignored)
             last_penalty_date = frappe.db.get_value(
                 "Loan Interest Accrual",
-                {"loan": against_loan, "docstatus": 1, "accrual_type": "Penalty"},
+                {
+                    "loan": against_loan,
+                    "docstatus": 1,
+                    "accrual_type": "Penalty",
+                    "penalty_amount": [">", 0],
+                },
                 "max(posting_date)",
             )
 
@@ -2035,6 +2049,43 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                         entry.payable_principal_amount, precision
                     ),
                 }
+
+            # ========================================================
+            # FIX 5: Calculate unaccrued interest for term loan closure
+            # ========================================================
+            # For term loans, unaccrued_interest was never computed — it
+            # only existed in the demand loan branch. This means Loan
+            # Closure for term loans showed interest_amount = 0 when the
+            # posting_date was before the next schedule row.
+            #
+            # For early closure, the borrower owes interest from the last
+            # accrued date up to the closure date, calculated as per-day
+            # interest on the outstanding principal.
+            #
+            # Find the last date interest was accrued or paid for
+            last_accrued_date = None
+
+            if final_due_date:
+                last_accrued_date = getdate(final_due_date)
+            else:
+                # No schedule row is due yet — use disbursement or last payment date
+                last_accrued_date = getdate(
+                    against_loan_doc.disbursement_date or against_loan_doc.posting_date
+                )
+
+            if last_accrued_date and getdate(posting_date) > last_accrued_date:
+                pending_days = date_diff(posting_date, last_accrued_date)
+                if pending_days > 0 and pending_principal_amount > 0:
+                    unaccrued_interest = flt(
+                        pending_days
+                        * get_per_day_interest(
+                            flt(pending_principal_amount, precision),
+                            loan_product_details.rate_of_interest,
+                            against_loan_doc.company,
+                            posting_date,
+                        ),
+                        precision,
+                    )
 
     else:
         # ================================================================

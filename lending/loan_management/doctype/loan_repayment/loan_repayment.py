@@ -43,24 +43,22 @@ class LoanRepayment(AccountsController):
         self.book_unaccrued_penalty()
 
     def on_submit(self):
-        if self.repayment_type == "Normal Repayment":
-            create_process_loan_classification(
-                posting_date=self.posting_date,
-                loan_product=self.loan_product,
-                loan=self.against_loan,
-                payment_reference=self.name,
-            )
+
+        # if self.repayment_type == "Normal Repayment":
+        #     create_process_loan_classification(
+        #         posting_date=self.posting_date,
+        #         loan_product=self.loan_product,
+        #         loan=self.against_loan,
+        #         payment_reference=self.name,
+        #     )
 
         self.update_paid_amount()
         if self.repayment_type == "Charges Waiver":
             self.make_credit_note()
 
+        loan_doc = frappe.get_doc("Loan", self.against_loan)
         self.make_gl_entries()
-
-        # self.update_loan_repayment_status()
-        from lending.main import update_loan_repayment_status
-
-        update_loan_repayment_status(frappe.get_doc("Loan", self.against_loan))
+        loan_doc.set_repayment_status()
 
     def on_cancel(self):
         self.check_future_accruals()
@@ -1853,25 +1851,12 @@ def get_pending_principal_amount(loan):
     return flt(pending_principal_amount, precision)
 
 
-# =============================================================================
-# FIX: REWRITTEN get_amounts - The core fix for wrong interest & principal
-# =============================================================================
-# PROBLEM: The old code read total_interest_paid / total_penalty_paid from the
-# Loan doc's summary fields. These fields:
-#   1) May not exist (getattr default 0.0)
-#   2) Are updated AFTER repayment submission, so during validate() they're stale
-#   3) Don't account for JIT accruals created during the current repayment
-#
-# SOLUTION: Derive ALL paid amounts from Loan Interest Accrual records (the
-# single source of truth) and Loan Repayment records, not from Loan doc summaries.
-# =============================================================================
 def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
     precision = cint(frappe.db.get_default("currency_precision")) or 2
 
     against_loan_doc = frappe.get_doc("Loan", against_loan)
     loan_product_details = frappe.get_doc("Loan Product", against_loan_doc.loan_product)
 
-    # Initialize Variables
     payable_principal_amount = 0.0
     total_pending_interest = 0.0
     penalty_amount = 0.0
@@ -1882,35 +1867,15 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
     pending_accrual_entries = {}
 
     if against_loan_doc.is_term_loan:
-        # ================================================================
-        # FIX 1: Use Loan doc totals for paid amounts
-        # ================================================================
-        # After reschedule, the Loan doc is reset to total_principal_paid=0,
-        # total_interest_paid=0. These are correct and incremented by each
-        # subsequent repayment in update_paid_amount().
-        #
-        # We CANNOT use sum(paid_*) from LIA records because after reschedule,
-        # old LIAs are artificially settled (paid_*=accrued_*) which inflates
-        # the totals and makes cumulative_prin - total_prin_paid go negative.
-        #
-        # The Loan doc fields ARE up-to-date when get_amounts() runs during
-        # validate() because the previous repayment's on_submit already
-        # committed the updated values.
-        # ================================================================
         total_prin_paid = flt(against_loan_doc.total_principal_paid, precision)
+        total_int_paid = flt(against_loan_doc.total_interest_paid, precision)
 
-        total_int_paid = 0.0
-        if hasattr(against_loan_doc, "total_interest_paid"):
-            total_int_paid = flt(against_loan_doc.total_interest_paid, precision)
-
-        # For penalty paid, use Loan Repayment records as source of truth
         total_pen_paid = flt(
             frappe.db.get_value(
                 "Loan Repayment",
                 {"against_loan": against_loan, "docstatus": 1},
                 "sum(total_penalty_paid)",
-            )
-            or 0,
+            ),
             precision,
         )
 
@@ -1928,11 +1893,6 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                 order_by="idx asc",
             )
 
-            # ========================================================
-            # FIX 2: Use <= comparison for posting_date inclusion
-            # The old code used date_diff > 0 which correctly excludes
-            # future rows, but we make it explicit with getdate comparison
-            # ========================================================
             cumulative_prin = 0.0
             cumulative_int = 0.0
 
@@ -1944,7 +1904,6 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                 cumulative_int += flt(sch.interest_amount, precision)
                 final_due_date = sch.payment_date
 
-            # Simple, bulletproof subtraction
             payable_principal_amount = flt(cumulative_prin - total_prin_paid, precision)
             if payable_principal_amount < 0:
                 payable_principal_amount = 0.0
@@ -1953,15 +1912,9 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
             if total_pending_interest < 0:
                 total_pending_interest = 0.0
 
-            # ========================================================
-            # FIX 3: SYNCHRONIZED PENALTY MATH (Billed + Unbilled)
-            # Removed debug frappe.msgprint
-            # ========================================================
             daily_penalty_rate = flt(loan_product_details.penalty_interest_rate)
             grace_period = cint(loan_product_details.grace_period_in_days)
 
-            # A) Get exactly what was locked in historically by the daily background job
-            # Exclude zeroed-out LIAs (penalty_amount set to 0 by reschedule)
             billed_penalty = flt(
                 frappe.db.get_value(
                     "Loan Interest Accrual",
@@ -1975,9 +1928,6 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                 )
             )
 
-            # B) Time machine for unbilled gap
-            # Only look at penalty LIAs that still have penalty_amount > 0
-            # (zeroed-out ones from reschedule should be ignored)
             last_penalty_date = frappe.db.get_value(
                 "Loan Interest Accrual",
                 {
@@ -1992,16 +1942,12 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
             unbilled_penalty = 0.0
 
             if daily_penalty_rate > 0:
-                start_eval_date = (
-                    add_days(last_penalty_date, 1)
-                    if last_penalty_date
-                    else add_days(schedules[0].payment_date, grace_period)
-                )
-                days_to_check = date_diff(posting_date, start_eval_date) + 1
+                penalty_start_date = add_days(schedules[0].payment_date, grace_period)
+                if last_penalty_date:
+                    penalty_start_date = add_days(last_penalty_date, 1)
 
-                # FIX: Removed debug frappe.msgprint that was left in production
+                days_to_check = date_diff(posting_date, penalty_start_date)
                 if days_to_check >= 0:
-                    # Pre-calculate exact unpaid principal per row using cash logic
                     remaining_paid_prin = total_prin_paid
                     for sch in schedules:
                         if remaining_paid_prin >= flt(sch.principal_amount, precision):
@@ -2016,7 +1962,7 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
 
                     # Walk forward day-by-day calculating unbilled penalty
                     for i in range(days_to_check + 1):
-                        eval_date = add_days(start_eval_date, i)
+                        eval_date = add_days(penalty_start_date, i)
                         overdue_principal_total = 0.0
 
                         for sch in schedules:
@@ -2034,13 +1980,10 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
 
             total_penalty_owed = billed_penalty + unbilled_penalty
             penalty_amount = flt(total_penalty_owed - total_pen_paid, precision)
+
             if penalty_amount < 0:
                 penalty_amount = 0.0
 
-            # ========================================================
-            # FIX 4: Fetch pending LIAs using the ACTUAL unpaid amounts
-            # from the LIA records themselves, ensuring consistency
-            # ========================================================
             unpaid_lias = get_accrued_interest_entries(against_loan, posting_date)
             for entry in unpaid_lias:
                 pending_accrual_entries[entry.name] = {
@@ -2050,31 +1993,17 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                     ),
                 }
 
-            # ========================================================
-            # FIX 5: Calculate unaccrued interest for term loan closure
-            # ========================================================
-            # For term loans, unaccrued_interest was never computed — it
-            # only existed in the demand loan branch. This means Loan
-            # Closure for term loans showed interest_amount = 0 when the
-            # posting_date was before the next schedule row.
-            #
-            # For early closure, the borrower owes interest from the last
-            # accrued date up to the closure date, calculated as per-day
-            # interest on the outstanding principal.
-            #
-            # Find the last date interest was accrued or paid for
             last_accrued_date = None
-
             if final_due_date:
                 last_accrued_date = getdate(final_due_date)
             else:
-                # No schedule row is due yet — use disbursement or last payment date
                 last_accrued_date = getdate(
                     against_loan_doc.disbursement_date or against_loan_doc.posting_date
                 )
 
             if last_accrued_date and getdate(posting_date) > last_accrued_date:
                 pending_days = date_diff(posting_date, last_accrued_date)
+                # frappe.msgprint(str(pending_days))
                 if pending_days > 0 and pending_principal_amount > 0:
                     unaccrued_interest = flt(
                         pending_days
@@ -2088,18 +2017,14 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                     )
 
     else:
-        # ================================================================
-        # DEMAND LOAN LOGIC (unchanged - was working correctly)
-        # ================================================================
+        # * Unused code because we are using demand loans
         accrued_interest_entries = get_accrued_interest_entries(
             against_loan_doc.name, posting_date
         )
         computed_penalty_date, pending_penalty_amount = get_penalty_details(
             against_loan
         )
-
-        last_entry_due_date = None  # FIX: Initialize to avoid NameError
-
+        last_entry_due_date = None
         for entry in accrued_interest_entries:
             due_date_after_grace_period = add_days(
                 entry.due_date, loan_product_details.grace_period_in_days
@@ -2140,7 +2065,6 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                     entry.due_date, loan_product_details.grace_period_in_days
                 )
 
-        # FIX: Only compute unaccrued interest if there were entries
         if last_entry_due_date:
             pending_days = date_diff(posting_date, last_entry_due_date)
             if pending_days > 0:

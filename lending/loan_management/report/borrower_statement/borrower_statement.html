@@ -1,234 +1,272 @@
-<%
-/*
-  BORROWER STATEMENT — Frappe Script Report HTML Print Format
-  ============================================================
-
-  SETUP:
-  1. In your Script Report folder, create/edit: borrower_statement.html
-  2. Paste this entire file there
-  3. The report's execute() must return custom_data as the 5th element:
-     return columns, flat_data, None, None, custom_data
-
-  TEMPLATE ENGINE:
-  Frappe uses John Resig's microtemplating for Script Report HTML.
-    <% ... %>   = JS code block
-    <%= ... %>  = Output expression (HTML-escaped)
-
-  AVAILABLE VARIABLES:
-    data        = array of row objects (the flat grid data)
-    filters     = the report filters {customer, loan}
-    report      = report metadata
-    frappe      = global frappe object
-
-  We call the Python function directly to get the structured loan data,
-  since `data` only contains the flat grid rows.
-*/
-
-// Call the Python function to get structured data
-var loans_data = frappe.call_sync({
-  method: "lending.loan_management.report.borrower_statement.borrower_statement.get_customer_loan_data",
-  args: {
-    customer: filters.customer || "",
-    loan_filter: filters.loan || ""
+<style>
+  .print-format td,
+  .print-format th {
+    padding: 5px !important;
   }
-});
+
+
+  .bs-wrap {
+    font-family: "Helvetica Neue", Arial, sans-serif;
+    font-size: 10px;
+    color: #222;
+  }
+
+  .bs-wrap .table td,
+  .bs-wrap .table th {
+    color: #000 !important;
+    border: none !important;
+    padding: 4px 6px !important;
+    font-size: 9.5px;
+  }
+
+  .bs-wrap .table tr {
+    border-bottom: 0.5px solid #ccc !important;
+  }
+
+  .bs-wrap .table thead tr {
+    border-bottom: 1.5px solid #000 !important;
+  }
+
+  .bs-wrap .section-title {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: .5rem;
+    margin: 1rem 0;
+    background-color: #dae7ff;
+  }
+
+  .bs-wrap .terms-tbl td {
+    padding: 4px 8px;
+    font-size: 10px;
+    border: 0.5px solid #cbcbcb !important;
+  }
+
+  .bs-wrap .terms-tbl .lbl {
+    font-weight: 600;
+    width: 21%;
+    background: #f0f7ff;
+  }
+
+  .bs-wrap .terms-tbl .val {
+    width: 29%;
+    text-align: right;
+  }
+
+  .bs-wrap .amt {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bs-wrap .pen-row td {
+    color: #888 !important;
+  }
+
+  .bs-wrap .rsc-row td {
+    color: #0F6E56 !important;
+    font-weight: 600;
+  }
+
+  .bs-wrap .closure-row td {
+    color: #185FA5 !important;
+    font-weight: 600;
+  }
+
+  .bs-wrap .neg {
+    color: #c0392b !important;
+  }
+
+  .bs-wrap .closed-stamp {
+    color: #0F6E56;
+    font-weight: 700;
+    text-align: center;
+    border: 2px solid #0F6E56;
+    padding: 6px;
+    margin: 8px 0;
+    font-size: 12px;
+  }
+
+  .bs-page {
+    page-break-after: always;
+  }
+
+  .bs-page:last-child {
+    page-break-after: auto;
+  }
+</style>
+
+{%
+var loans_data = data[0].custom_data || [];
 
 if (!loans_data || !loans_data.length) {
-  %><p style="padding:40px;text-align:center;color:#999;">No loan data found for this customer.</p><%
+/* Try calling the Python function directly */
+var result = frappe.call({
+method: "lending.loan_management.report.borrower_statement.borrower_statement.get_customer_loan_data",
+args: {
+customer: filters.customer || "",
+loan_filter: filters.loan || ""
+},
+async: false
+});
+if (result && result.message) {
+loans_data = result.message;
+}
 }
 
-// Helper functions
-function fmt_date(d) {
-  if (!d) return "";
-  var dt = new Date(d);
-  var dd = String(dt.getDate()).padStart(2, "0");
-  var mm = String(dt.getMonth() + 1).padStart(2, "0");
-  var yy = dt.getFullYear();
-  return dd + "/" + mm + "/" + yy;
+function fmtDate(d) {
+if (!d) return "";
+return frappe.datetime.str_to_user(d);
 }
 
-function fmt_money(val) {
-  var n = parseFloat(val) || 0;
-  return n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+function fmtMoney(v) {
+return format_currency(v);
 }
 
-for (var li = 0; li < (loans_data || []).length; li++) {
-  var loan = loans_data[li];
-  var ld = loan.loan_details;
-  var cd = loan.customer_details;
-  var ci = loan.company_info || {};
-  var reps = loan.repayment_rows || [];
-  var txns = loan.transactions || [];
-  var is_first = (li === 0);
-%>
-
-<% if (!is_first) { %>
-<div style="page-break-before:always;"></div>
-<% } %>
-
-<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:10px;color:#222;line-height:1.35;">
-
-  <!-- LOGO -->
-  <% if (ci.logo) { %>
-  <div style="text-align:center;margin-bottom:6px;">
-    <img src="<%= ci.logo %>" style="max-height:70px;" alt="">
-  </div>
-  <% } %>
-
-  <!-- TITLE BAR -->
-  <div style="text-align:center;font-size:16px;font-weight:700;letter-spacing:4px;text-transform:uppercase;border-top:2.5px solid #222;border-bottom:2.5px solid #222;padding:7px 0;margin:0 0 12px;">
-    Client Statement
+for (var li = 0; li < (loans_data || []).length; li++) { var loan=loans_data[li]; var ld=loan.loan_details || {}; var
+  cd=loan.customer_details || {}; var ci=loan.company_info || {}; var reps=loan.repayment_rows || []; var
+  txns=loan.transactions || []; var last_bal=loan.total_balance || 0; %} <div class="bs-wrap bs-page">
+  <div>
+    <div>
+      <!-- Letter head -->
+    </div>
+    <div>
+      <div style="text-align: center; font-weight: 700; font-size: 1.25rem;">{%= __("Client Statement") %}</div>
+    </div>
   </div>
 
-  <!-- COMPANY + CUSTOMER HEADER -->
-  <table style="width:100%;margin-bottom:14px;border:none;">
-    <tr>
-      <td style="vertical-align:top;border:none;padding:0;">
-        <div style="font-size:11px;font-weight:600;">
-          <%= ci.name || "" %>
-        </div>
-        <div style="font-size:10px;color:#555;"><%= ci.branch || "" %></div>
-      </td>
-      <td style="vertical-align:top;text-align:right;border:none;padding:0;font-size:10px;line-height:1.5;">
-        <span style="font-weight:600;">Date:</span> <%= ci.date || "" %><br>
-        <%= cd.name %><br>
-        <%= cd.mobile %><br>
-        <%= cd.cnic %><br>
-        <%= cd.address %>
-      </td>
-    </tr>
-  </table>
+  <div style="display:flex;justify-content:space-between;border:2px solid #222;padding:0.5rem;margin:10px 0;">
+    <div>
+      <div><b>{%= __("Customer") %}:</b> {%= cd.name %}</div>
+      {% if (cd.cnic) { %}<div><b>{%= __("CNIC") %}:</b> {%= cd.cnic %}</div>{% } %}
+      {% if (cd.mobile) { %}<div><b>{%= __("Mobile") %}:</b> {%= cd.mobile %}</div>{% } %}
+      {% if (cd.address) { %}<div>{%= cd.address %}</div>{% } %}
+    </div>
+    <div style="text-align:right;">
+      <div><b>{%= __("Date") %}:</b> {%= fmtDate(ci.date) %}</div>
+      <div><b>{%= __("Loan #") %}:</b> {%= ld.name %}</div>
+      <div><b>{%= __("Status") %}:</b> {%= ld.status || "Disbursed" %}</div>
+    </div>
+  </div>
+
+  <!-- CLOSED STAMP -->
+  {% if (ld.is_closed) { %}
+  <div class="closed-stamp">
+    LOAN CLOSED {%= ld.closure_date ? "on " + fmtDate(ld.closure_date) : "" %}
+  </div>
+  {% } %}
 
   <!-- LOAN TERMS -->
-  <div style="font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;padding-bottom:4px;border-bottom:1.5px solid #888;margin:16px 0 8px;">
-    Loan Terms
-  </div>
-
-  <table style="width:100%;border-collapse:collapse;margin-bottom:14px;border:0.5px solid #bbb;">
+  <div class="section-title">{%= __("Loan Terms") %}</div>
+  <table class="terms-tbl" style="width:100%;border-collapse:collapse;margin-bottom:14px;border:0.5px solid #bbb;">
     <tr>
-      <td style="padding:4px 8px;font-weight:600;width:21%;background:#f2f4f7;border:0.5px solid #ddd;">Loan #</td>
-      <td style="padding:4px 8px;width:29%;text-align:right;border:0.5px solid #ddd;"><%= ld.name %></td>
-      <td style="padding:4px 8px;font-weight:600;width:21%;background:#f2f4f7;border:0.5px solid #ddd;">Interest Amount</td>
-      <td style="padding:4px 8px;width:29%;text-align:right;border:0.5px solid #ddd;"><%= fmt_money(ld.interest_amount) %></td>
+      <td class="lbl">{%= __("Loan #") %}</td>
+      <td class="val">{%= ld.name %}</td>
+      <td class="lbl">{%= __("Interest Amount") %}</td>
+      <td class="val">{%= fmtMoney(ld.interest_amount) %}</td>
     </tr>
     <tr>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Disbursement Date</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= fmt_date(ld.disbursement_date) %></td>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Non Deductable Fees</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= fmt_money(ld.non_deductable_fees) %></td>
+      <td class="lbl">{%= __("Disbursement Date") %}</td>
+      <td class="val">{%= fmtDate(ld.disbursement_date) %}</td>
+      <td class="lbl">{%= __("Non Deductable Fees") %}</td>
+      <td class="val">{%= fmtMoney(ld.non_deductable_fees) %}</td>
     </tr>
     <tr>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Maturity Date</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= fmt_date(ld.maturity_date) %></td>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Penalty Amount</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= fmt_money(ld.penalty_amount) %></td>
+      <td class="lbl">{%= __("Maturity Date") %}</td>
+      <td class="val">{%= fmtDate(ld.maturity_date) %}</td>
+      <td class="lbl">{%= __("Penalty Amount") %}</td>
+      <td class="val">{%= fmtMoney(ld.penalty_amount) %}</td>
     </tr>
     <tr>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Repayment Cycle</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= ld.repayment_cycle || "Monthly" %></td>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Total Due Amount</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= fmt_money(ld.total_due) %></td>
+      <td class="lbl">{%= __("Repayment Cycle") %}</td>
+      <td class="val">{%= ld.repayment_cycle || "Monthly" %}</td>
+      <td class="lbl">{%= __("Total Due Amount") %}</td>
+      <td class="val">{%= fmtMoney(ld.total_due) %}</td>
     </tr>
     <tr>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Principal Amount</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= fmt_money(ld.principal_amount) %></td>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Paid Amount</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= fmt_money(ld.paid_amount) %></td>
+      <td class="lbl">{%= __("Principal Amount") %}</td>
+      <td class="val">{%= fmtMoney(ld.principal_amount) %}</td>
+      <td class="lbl">{%= __("Paid Amount") %}</td>
+      <td class="val">{%= fmtMoney(ld.paid_amount) %}</td>
     </tr>
     <tr>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Interest Rate</td>
-      <td style="padding:4px 8px;text-align:right;border:0.5px solid #ddd;"><%= ld.interest_rate %>%/Year</td>
-      <td style="padding:4px 8px;font-weight:600;background:#f2f4f7;border:0.5px solid #ddd;">Balance Amount</td>
-      <td style="padding:4px 8px;text-align:right;font-weight:700;border:0.5px solid #ddd;"><%= fmt_money(ld.balance_amount) %></td>
+      <td class="lbl">{%= __("Interest Rate") %}</td>
+      <td class="val">{%= ld.interest_rate %}%/{%= __("Year") %}</td>
+      <td class="lbl">{%= __("Balance Amount") %}</td>
+      <td class="val" style="font-weight:700;">{%= fmtMoney(ld.balance_amount) %}</td>
     </tr>
   </table>
 
-  <!-- REPAYMENTS -->
-  <% if (reps.length) { %>
-  <div style="font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;padding-bottom:4px;border-bottom:1.5px solid #888;margin:16px 0 8px;">
-    Repayments
-  </div>
-
-  <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:9.5px;">
+  <!-- REPAYMENTS TABLE -->
+  {% if (reps.length) { %}
+  <div class="section-title">{%= __("Repayments") %}</div>
+  <table class="table" style="width:100%;">
     <thead>
-      <tr style="background:#dde3ea;">
-        <th style="padding:5px 6px;text-align:left;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:17%;">Loan #</th>
-        <th style="padding:5px 6px;text-align:left;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:17%;">Borrower Name</th>
-        <th style="padding:5px 6px;text-align:left;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:14%;">Repayment Method</th>
-        <th style="padding:5px 6px;text-align:left;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:18%;">Collected By</th>
-        <th style="padding:5px 6px;text-align:left;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:14%;">Collection Date</th>
-        <th style="padding:5px 6px;text-align:right;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:20%;">Total Paid Amount</th>
+      <tr>
+        <th style="width:15%;font-weight:700;">{%= __("Loan #") %}</th>
+        <th style="width:17%;font-weight:700;">{%= __("Borrower Name") %}</th>
+        <th style="width:13%;font-weight:700;">{%= __("Method") %}</th>
+        <th style="width:17%;font-weight:700;">{%= __("Collected By") %}</th>
+        <th style="width:14%;font-weight:700;">{%= __("Date") %}</th>
+        <th style="width:16%;font-weight:700;" class="amt">{%= __("Amount") %}</th>
       </tr>
     </thead>
     <tbody>
-      <% for (var ri = 0; ri < reps.length; ri++) { var rep = reps[ri]; %>
-      <tr>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;"><%= rep.loan %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;"><%= rep.borrower_name %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;"><%= rep.repayment_method %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;"><%= rep.collected_by %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;"><%= fmt_date(rep.collection_date) %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;text-align:right;font-variant-numeric:tabular-nums;"><%= fmt_money(rep.total_paid_amount) %></td>
-      </tr>
-      <% } %>
+      {% for (var ri = 0; ri < reps.length; ri++) { var rep=reps[ri]; %} <tr>
+        <td>{%= rep.loan %}</td>
+        <td>{%= rep.borrower_name %}</td>
+        <td>{%= rep.repayment_method %}</td>
+        <td>{%= rep.collected_by %}</td>
+        <td>{%= fmtDate(rep.collection_date) %}</td>
+        <td class="amt">{%= fmtMoney(rep.total_paid_amount) %}</td>
+        </tr>
+        {% } %}
     </tbody>
   </table>
-  <% } %>
+  {% } %}
 
   <!-- STATEMENT OF TRANSACTIONS -->
-  <div style="font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;padding-bottom:4px;border-bottom:1.5px solid #888;margin:16px 0 8px;">
-    Statement of Transactions
-  </div>
-
-  <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:9.5px;">
+  <div class="section-title">{%= __("Statement of Transactions") %}</div>
+  <table class="table" style="width:100%;">
     <thead>
-      <tr style="background:#dde3ea;">
-        <th style="padding:5px 6px;text-align:left;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:12%;">Date</th>
-        <th style="padding:5px 6px;text-align:left;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:43%;">Description</th>
-        <th style="padding:5px 6px;text-align:right;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:15%;">Debit</th>
-        <th style="padding:5px 6px;text-align:right;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:15%;">Credit</th>
-        <th style="padding:5px 6px;text-align:right;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #999;width:15%;">Balance</th>
+      <tr>
+        <th style="width:12%;font-weight:700;">{%= __("Date") %}</th>
+        <th style="width:40%;font-weight:700;">{%= __("Description") %}</th>
+        <th style="width:14%;font-weight:700;" class="amt">{%= __("Debit") %}</th>
+        <th style="width:14%;font-weight:700;" class="amt">{%= __("Credit") %}</th>
+        <th style="width:16%;font-weight:700;" class="amt">{%= __("Balance") %}</th>
       </tr>
     </thead>
     <tbody>
-      <% for (var ti = 0; ti < txns.length; ti++) {
-        var tx = txns[ti];
-        var is_penalty = (tx.description || "").indexOf("Penalty") !== -1;
-        var is_negative = (parseFloat(tx.balance) || 0) < 0;
-        var row_color = is_penalty ? "color:#888;" : "";
-        var bal_color = is_negative ? "color:#c0392b;" : "";
-      %>
-      <tr>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;<%= row_color %>"><%= fmt_date(tx.date) %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;<%= row_color %>"><%= tx.description %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;text-align:right;font-variant-numeric:tabular-nums;<%= row_color %>"><%= tx.debit ? fmt_money(tx.debit) : "" %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;text-align:right;font-variant-numeric:tabular-nums;<%= row_color %>"><%= tx.credit ? fmt_money(tx.credit) : "" %></td>
-        <td style="padding:3.5px 6px;border-bottom:0.5px solid #e8e8e8;text-align:right;font-variant-numeric:tabular-nums;<%= bal_color %>"><%= fmt_money(tx.balance) %></td>
-      </tr>
-      <% } %>
+      {% for (var ti = 0; ti < txns.length; ti++) { var tx=txns[ti]; var desc=tx.description || "" ; var
+        is_pen=desc.indexOf("Penalty") !==-1; var is_rsc=desc.indexOf("Rescheduled") !==-1; var
+        is_closure=desc.indexOf("Closure") !==-1; var bal_neg=(parseFloat(tx.balance) || 0) < 0; var row_class=is_pen
+        ? "pen-row" : (is_rsc ? "rsc-row" : (is_closure ? "closure-row" : "" )); %} <tr class="{%= row_class %}">
+        <td>{%= fmtDate(tx.date) %}</td>
+        <td>{%= tx.description %}</td>
+        <td class="amt">{%= tx.debit ? fmtMoney(tx.debit) : "" %}</td>
+        <td class="amt">{%= tx.credit ? fmtMoney(tx.credit) : "" %}</td>
+        <td class="amt {%= bal_neg ? 'neg' : '' %}">{%= fmtMoney(tx.balance) %}</td>
+        </tr>
+        {% } %}
 
-      <!-- TOTAL ROW -->
-      <%
-        var total_bal = parseFloat(loan.total_balance) || 0;
-        var total_color = total_bal < 0 ? "color:#c0392b;" : "";
-      %>
-      <tr>
-        <td style="padding:6px 6px 0;border-top:1.5px solid #333;border-bottom:none;"></td>
-        <td style="padding:6px 6px 0;border-top:1.5px solid #333;border-bottom:none;"></td>
-        <td colspan="2" style="padding:6px 6px 0;border-top:1.5px solid #333;border-bottom:none;text-align:right;font-weight:700;">Total</td>
-        <td style="padding:6px 6px 0;border-top:1.5px solid #333;border-bottom:none;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;<%= total_color %>"><%= fmt_money(total_bal) %></td>
-      </tr>
+        <!-- TOTAL ROW -->
+        <tr style="border-top:1.5px solid #333 !important;">
+          <td></td>
+          <td></td>
+          <td class="amt" colspan="2" style="font-weight:700;text-align:right;">{%= __("Total") %}</td>
+          <td class="amt {%= last_bal < 0 ? 'neg' : '' %}" style="font-weight:700;">{%= fmtMoney(last_bal) %}</td>
+        </tr>
     </tbody>
   </table>
 
   <!-- FOOTER -->
-  <table style="width:100%;margin-top:8px;border-top:0.5px solid #ccc;padding-top:4px;font-size:8.5px;color:#999;border:none;">
-    <tr>
-      <td style="border:none;padding:4px 0 0;"><%= ci.name || "" %></td>
-      <td style="border:none;padding:4px 0 0;text-align:right;"><%= (li + 1) %>/<%= loans_data.length %></td>
-    </tr>
-  </table>
+  <div
+    style="display:flex;justify-content:space-between;margin-top:10px;border-top:0.5px solid #ccc;padding-top:4px;font-size:8.5px;color:#999;">
+    <div>{%= ci.name %}</div>
+    <div>{%= (li + 1) %}/{%= loans_data.length %}</div>
+  </div>
 
-</div>
+  </div>
 
-<% } /* end loan loop */ %>
+  {% } %}

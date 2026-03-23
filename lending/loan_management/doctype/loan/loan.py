@@ -165,18 +165,121 @@ class Loan(AccountsController):
 
         schedule_id = frappe.db.get_value(
             "Loan Repayment Schedule",
-            {"loan": self.name, "docstatus": ["!=", 2]},
+            {"loan": self.name, "docstatus": ["!=", 2], "status": ["!=", "Superseded"]},
             "name",
         )
-        frappe.db.set_value(
-            self.doctype,
-            self.name,
-            {
-                "repayment_schedule_name": schedule_id,
-            },
-        )
-        frappe.db.commit()
+
+        self.db_set("repayment_schedule_name", schedule_id)
+        self.set_repayment_status()
+        
         self.reload()
+
+    def set_repayment_status(self):
+        if self.status == "Closed":
+            return
+
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
+        current_date = getdate()
+        new_status = "Regular"
+        overdue_days = 0
+
+        schedule_id = frappe.db.get_value(
+            "Loan Repayment Schedule",
+            {"loan": self.name, "docstatus": 1, "status": "Active"},
+            "name",
+        )
+        if not schedule_id:
+            return
+
+        schedule = frappe.db.get_all(
+            "Repayment Schedule",
+            filters={"parent": schedule_id},
+            fields=[
+                "name",
+                "payment_date",
+                "interest_amount",
+                "principal_amount",
+                "is_accrued",
+            ],
+            order_by="idx asc",
+        )
+
+        if not schedule:
+            return
+
+        maturity_date = schedule[-1].payment_date
+        past_due_rows = 0
+        has_partial_payment = False
+        oldest_unpaid_date = None
+
+        lia_totals = frappe.db.sql(
+            """
+            SELECT
+                due_date,
+                SUM(paid_interest_amount) as total_paid_int,
+                SUM(paid_principal_amount) as total_paid_prin
+            FROM `tabLoan Interest Accrual`
+            WHERE loan = %s AND docstatus = 1
+            GROUP BY due_date
+            """,
+            (self.name,),
+            as_dict=1,
+        )
+
+        paid_by_date = {}
+        for row in lia_totals:
+            paid_by_date[getdate(row.due_date)] = {
+                "paid_int": flt(row.total_paid_int, precision),
+                "paid_prin": flt(row.total_paid_prin, precision),
+            }
+
+        for sch in schedule:
+            sch_date = getdate(sch.payment_date)
+            paid_data = paid_by_date.get(sch_date, {"paid_int": 0, "paid_prin": 0})
+
+            total_billed = flt(sch.interest_amount, precision) + flt(
+                sch.principal_amount, precision
+            )
+            total_paid = flt(paid_data["paid_int"], precision) + flt(
+                paid_data["paid_prin"], precision
+            )
+
+            is_fully_paid = flt(total_paid, precision) >= flt(total_billed, precision)
+
+            if sch_date < current_date and not is_fully_paid:
+                past_due_rows += 1
+
+                if not oldest_unpaid_date:
+                    oldest_unpaid_date = sch.payment_date
+
+                if flt(total_paid, precision) > 0:
+                    has_partial_payment = True
+
+        if oldest_unpaid_date:
+            days_late = date_diff(current_date, oldest_unpaid_date)
+            overdue_days = days_late
+
+            if current_date > getdate(maturity_date):
+                new_status = "Past Maturity"
+
+            elif has_partial_payment or past_due_rows > 1:
+                new_status = "Arrears"
+
+            elif days_late >= 30:
+                new_status = "Missed Repayment"
+
+            elif days_late > 0 and days_late < 30:
+                new_status = "Overdue"
+        else:
+            new_status = "Regular"
+            overdue_days = 0
+
+        if (
+            self.repayment_status != new_status
+            or flt(self.get("overdue_days")) != overdue_days
+        ):
+            self.db_set("repayment_status", new_status)
+            self.db_set("overdue_days", overdue_days)
 
     def set_missing_fields(self):
         if not self.company:

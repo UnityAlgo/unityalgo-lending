@@ -18,9 +18,6 @@ class LoanInterestAccrual(AccountsController):
         if not self.posting_date:
             self.posting_date = nowdate()
 
-        # if not self.interest_amount and not self.payable_principal_amount:
-        #     frappe.throw(_("Interest Amount or Principal Amount is mandatory"))
-
         if (
             not self.interest_amount
             and not self.payable_principal_amount
@@ -168,9 +165,6 @@ class LoanInterestAccrual(AccountsController):
             make_gl_entries(gle_map, cancel=cancel, adv_adj=adv_adj)
 
 
-# For Eg: If Loan disbursement date is '01-09-2019' and disbursed amount is 1000000 and
-# rate of interest is 13.5 then first loan interest accrual will be on '01-10-2019'
-# which means interest will be accrued for 30 days which should be equal to 11095.89
 def calculate_accrual_amount_for_demand_loans(
     loan, posting_date, process_loan_interest, accrual_type
 ):
@@ -288,13 +282,74 @@ def make_accrual_interest_entry_for_term_loans(
     loan_product=None,
     accrual_type="Regular",
 ):
+    """Create interest accrual LIAs for term loan schedule rows that are due.
+
+    FIX: Before creating an LIA, check what has already been accrued for each
+    schedule row's due_date (from JIT accruals created by partial payments).
+    Only accrue the REMAINING amount, not the full schedule amount.
+
+    Example:
+      Schedule Row 1: Interest 1,066.67 + Principal 7,610.92
+      Partial payment already created JIT LIA: Interest 1,066.67 + Principal 3,933.33
+      This function should create: Interest 0 + Principal 3,677.59 (the remainder)
+      NOT: Interest 1,066.67 + Principal 7,610.92 (which would double-count)
+    """
     curr_date = posting_date or add_days(nowdate(), 1)
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
 
     term_loans = get_term_loans(curr_date, term_loan, loan_product)
     accrued_entries = []
 
     for loan in term_loans:
-        accrued_entries.append(loan.payment_entry)
+        # =============================================================
+        # FIX: Check what's already been accrued for this due_date
+        # (from JIT accruals created by book_unaccrued_interest during
+        # partial payments before the schedule date arrived)
+        # =============================================================
+        already_accrued_int = flt(
+            frappe.db.get_value(
+                "Loan Interest Accrual",
+                {
+                    "loan": loan.name,
+                    "due_date": loan.payment_date,
+                    "docstatus": 1,
+                },
+                "sum(interest_amount)",
+            )
+            or 0,
+            precision,
+        )
+
+        already_accrued_prin = flt(
+            frappe.db.get_value(
+                "Loan Interest Accrual",
+                {
+                    "loan": loan.name,
+                    "due_date": loan.payment_date,
+                    "docstatus": 1,
+                },
+                "sum(payable_principal_amount)",
+            )
+            or 0,
+            precision,
+        )
+
+        # Calculate remaining unaccrued amounts
+        remaining_int = flt(loan.interest_amount - already_accrued_int, precision)
+        remaining_prin = flt(loan.principal_amount - already_accrued_prin, precision)
+
+        # Don't go negative (in case of overpayment/over-accrual)
+        if remaining_int < 0:
+            remaining_int = 0
+        if remaining_prin < 0:
+            remaining_prin = 0
+
+        # Skip if nothing left to accrue
+        if remaining_int <= 0 and remaining_prin <= 0:
+            # Still mark as accrued since the full amount has been covered
+            accrued_entries.append(loan.payment_entry)
+            continue
+
         args = frappe._dict(
             {
                 "loan": loan.name,
@@ -303,8 +358,8 @@ def make_accrual_interest_entry_for_term_loans(
                 "applicant": loan.applicant,
                 "interest_income_account": loan.interest_income_account,
                 "loan_account": loan.loan_account,
-                "interest_amount": loan.interest_amount,
-                "payable_principal": loan.principal_amount,
+                "interest_amount": remaining_int,
+                "payable_principal": remaining_prin,
                 "process_loan_interest": process_loan_interest,
                 "repayment_schedule_name": loan.payment_entry,
                 "posting_date": posting_date,
@@ -314,11 +369,12 @@ def make_accrual_interest_entry_for_term_loans(
         )
 
         make_loan_interest_accrual_entry(args)
+        accrued_entries.append(loan.payment_entry)
 
     if accrued_entries:
         frappe.db.sql(
             """UPDATE `tabRepayment Schedule`
-			SET is_accrued = 1 where name in (%s)"""  # nosec
+            SET is_accrued = 1 where name in (%s)"""  # nosec
             % ", ".join(["%s"] * len(accrued_entries)),
             tuple(accrued_entries),
         )
@@ -420,13 +476,12 @@ def get_no_of_days_for_interest_accural(loan, posting_date):
 def get_last_accrual_date(loan, posting_date):
     last_posting_date = frappe.db.sql(
         """ SELECT MAX(posting_date) from `tabLoan Interest Accrual`
-		WHERE loan = %s and docstatus = 1""",
+        WHERE loan = %s and docstatus = 1""",
         (loan),
     )
 
     if last_posting_date[0][0]:
         last_interest_accrual_date = last_posting_date[0][0]
-        # interest for last interest accrual date is already booked, so add 1 day
         last_disbursement_date = get_last_disbursement_date(loan, posting_date)
 
         if last_disbursement_date and getdate(last_disbursement_date) > add_days(
@@ -484,7 +539,6 @@ def get_per_day_interest(
     ):
         year_divisor = 360
     else:
-        # Default is Actual/Actual
         year_divisor = days_in_year(get_datetime(posting_date).year)
 
     return flt((principal_amount * rate_of_interest) / (year_divisor * 100))

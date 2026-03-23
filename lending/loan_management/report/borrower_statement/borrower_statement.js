@@ -9,9 +9,6 @@ frappe.query_reports["Borrower Statement"] = {
 			fieldtype: "Link",
 			options: "Customer",
 			reqd: 1,
-			on_change: function () {
-				frappe.query_report.set_filter_value("loan", "");
-			}
 		},
 		{
 			label: __("Loan"),

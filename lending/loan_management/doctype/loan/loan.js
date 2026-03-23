@@ -157,7 +157,7 @@ frappe.ui.form.on('Loan', {
 			frm.add_custom_button(__("Borrower Statement"), function () {
 				frappe.route_options = {
 					"customer": frm.doc.applicant,
-					"loan": frm.doc.name
+					"loan": frm.doc.name,
 				}
 				frappe.set_route("query-report", "Borrower Statement");
 			}, "View")

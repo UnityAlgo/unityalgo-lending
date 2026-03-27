@@ -12,8 +12,8 @@
   "column_break_gisk",
   "amount",
   "event",
-  "charge_accounts_section",
   "income_account",
+  "charge_accounts_section",
   "waiver_account",
   "suspense_account",
   "column_break_yajs",
@@ -26,19 +26,22 @@
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Charge Type",
-   "options": "Item"
+   "options": "Item",
+   "reqd": 1
   },
   {
+   "default": "Disbursement",
    "fieldname": "event",
    "fieldtype": "Select",
-   "in_list_view": 1,
+   "hidden": 1,
    "label": "Event",
    "options": "\nDisbursement\nRepayment\nRestructure"
   },
   {
+   "default": "Fixed Amount",
    "fieldname": "charge_based_on",
    "fieldtype": "Select",
-   "in_list_view": 1,
+   "hidden": 1,
    "label": "Charge Based On",
    "options": "Percentage\nFixed Amount"
   },
@@ -46,18 +49,21 @@
    "fieldname": "amount",
    "fieldtype": "Currency",
    "in_list_view": 1,
-   "label": "Amount"
+   "label": "Amount",
+   "reqd": 1
   },
   {
    "fieldname": "percentage",
    "fieldtype": "Percent",
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Percentage"
   },
   {
    "columns": 2,
    "fieldname": "income_account",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Income Account",
    "options": "Account"
   },
@@ -68,6 +74,7 @@
   {
    "fieldname": "charge_accounts_section",
    "fieldtype": "Section Break",
+   "hidden": 1,
    "label": "Charge Accounts"
   },
   {
@@ -102,12 +109,13 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2023-10-10 21:57:17.905327",
+ "modified": "2026-03-25 15:48:51.994570",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Charges",
  "owner": "Administrator",
  "permissions": [],
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": []

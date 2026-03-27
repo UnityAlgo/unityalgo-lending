@@ -642,6 +642,9 @@ class LoanRepayment(AccountsController):
         loan["total_principal_paid"] = flt(loan.total_principal_paid) + flt(
             self.principal_amount_paid
         )
+        loan["total_principle_payable"] = flt(
+            loan["loan_amount"] - loan["total_principal_paid"]
+        )
 
         if has_total_int_paid:
             loan["total_interest_paid"] = flt(loan.total_interest_paid) + flt(
@@ -698,11 +701,12 @@ class LoanRepayment(AccountsController):
             loan["status"] = status
 
         if self.repayment_type in ("Normal Repayment", "Loan Closure"):
-            update_query = "UPDATE `tabLoan` SET total_amount_paid = %s, total_principal_paid = %s, status = %s"
+            update_query = "UPDATE `tabLoan` SET total_amount_paid = %s, total_principal_paid = %s, status = %s, total_principle_payable = %s"
             update_values = [
                 loan.total_amount_paid,
                 loan.total_principal_paid,
                 loan.status,
+                loan.total_principle_payable,
             ]
 
             if has_total_int_paid:
@@ -824,15 +828,17 @@ class LoanRepayment(AccountsController):
                 )
                 lia_doc.cancel()
 
+        pending_principal_amount = get_pending_principal_amount(loan)
         frappe.db.sql(
             """ UPDATE `tabLoan`
-            SET total_amount_paid = %s, total_principal_paid = %s, status = %s
+            SET total_amount_paid = %s, total_principal_paid = %s, status = %s, total_principle_payable=%s
             WHERE name = %s """,
             (
                 loan.total_amount_paid,
                 loan.total_principal_paid,
                 loan.status,
                 self.against_loan,
+                pending_principal_amount,
             ),
         )
 

@@ -66,6 +66,7 @@
   "credit_adjustment_amount",
   "column_break_19",
   "total_interest_payable",
+  "total_principle_payable",
   "total_amount_paid",
   "is_npa",
   "manual_npa",
@@ -556,12 +557,22 @@
    "no_copy": 1,
    "options": "Company:company:default_currency",
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "is_term_loan",
+   "fieldname": "total_principle_payable",
+   "fieldtype": "Currency",
+   "label": "Total Principle Payable",
+   "no_copy": 1,
+   "options": "Company:company:default_currency",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-21 14:04:52.407701",
+ "modified": "2026-03-25 09:55:15.995368",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan",

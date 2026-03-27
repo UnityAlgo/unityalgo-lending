@@ -8,7 +8,7 @@ const ALLOWED_ROLES = ["System Manager"];
 
 frappe.ui.form.on('Loan Application', {
 	validate: function (frm) {
-		const {  latitude, longitude } = frm.doc;
+		const { latitude, longitude } = frm.doc;
 
 
 		if (latitude && longitude) return;

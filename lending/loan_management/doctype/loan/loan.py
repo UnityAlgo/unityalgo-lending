@@ -54,7 +54,7 @@ class Loan(AccountsController):
     def update_repayment_schedule(self):
         schedule_id = frappe.db.get_value(
             "Loan Repayment Schedule",
-            {"loan": self.name, "docstatus": ["!=", 2]},
+            {"loan": self.name, "docstatus": ["!=", 2], "status": ["!=", "Superseded"]},
             "name",
         )
 
@@ -171,7 +171,7 @@ class Loan(AccountsController):
 
         self.db_set("repayment_schedule_name", schedule_id)
         self.set_repayment_status()
-        
+
         self.reload()
 
     def set_repayment_status(self):
@@ -191,18 +191,22 @@ class Loan(AccountsController):
         if not schedule_id:
             return
 
-        schedule = frappe.db.get_all(
-            "Repayment Schedule",
-            filters={"parent": schedule_id},
-            fields=[
-                "name",
-                "payment_date",
-                "interest_amount",
-                "principal_amount",
-                "is_accrued",
-            ],
-            order_by="idx asc",
+        schedule = frappe.db.sql(
+            f"select name, payment_date, interest_amount, principal_amount, is_accrued from `tabRepayment Schedule` where parent='{schedule_id}' order by idx asc",
+            as_dict=True,
         )
+        # schedule = frappe.db.get_all(
+        #     "Repayment Schedule",
+        #     filters={"parent": schedule_id},
+        #     fields=[
+        #         "name",
+        #         "payment_date",
+        #         "interest_amount",
+        #         "principal_amount",
+        #         "is_accrued",
+        #     ],
+        #     order_by="idx asc",
+        # )
 
         if not schedule:
             return
@@ -351,6 +355,7 @@ class Loan(AccountsController):
         draft_schedule = frappe.db.get_value(
             "Loan Repayment Schedule", {"loan": self.name, "docstatus": 0}, "name"
         )
+
         if draft_schedule:
             schedule = frappe.get_doc("Loan Repayment Schedule", draft_schedule)
             schedule.submit()
@@ -594,6 +599,32 @@ def make_loan_disbursement(
         return disbursement_entry.as_dict()
     else:
         return disbursement_entry
+
+
+@frappe.whitelist()
+def make_bulk_disbursement(loans: str | list):
+    if isinstance(loans, str):
+        loans = json.loads(loans)
+
+    try:
+        for i in loans:
+            loan_doc = frappe.get_doc("Loan", i)
+            if loan_doc.docstatus == 1 and loan_doc.status == "Sanctioned":
+                disbursement = make_loan_disbursement(
+                    loan_doc.name,
+                    loan_doc.company,
+                    "Customer",
+                    loan_doc.applicant,
+                    loan_doc.loan_amount,
+                )
+                disbursement.save()
+                disbursement.submit()
+
+        frappe.db.commit()
+        return "The loan has been disbursed successfully."
+
+    except Exception as e:
+        return str(e)
 
 
 @frappe.whitelist()
@@ -1177,7 +1208,15 @@ def move_unpaid_interest_to_suspense_ledger(
 
 @frappe.whitelist()
 def shift_schedule_date(name, new_date, loan_name):
-    row = frappe.get_doc("Repayment Schedule", name)
+    row_query = frappe.db.sql(
+        f"select * from `tabRepayment Schedule` where name = '{name}' ", as_dict=True
+    )
+    row = None
+    if row_query:
+        row = row_query[0]
+
+    if not row:
+        frappe.throw("Row none not found")
     next_payment_date = frappe.db.get_value(
         "Repayment Schedule", {"parent": row.parent, "idx": row.idx + 1}, "payment_date"
     )

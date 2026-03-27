@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_import": 1,
  "autoname": "ACC-LOAP-.YYYY.-.#####",
  "creation": "2019-08-29 17:46:49.201740",
  "doctype": "DocType",
@@ -43,6 +44,7 @@
   "repayment_amount",
   "total_payable_interest",
   "amended_from",
+  "update_record",
   "geolocation_section",
   "latitude",
   "column_break_vuyl",
@@ -125,6 +127,7 @@
   },
   {
    "bold": 1,
+   "default": "0",
    "depends_on": "eval: !frappe.user.has_role(\"Loan Officer\") && frappe.user.has_role(\"System Manager\");",
    "fetch_from": "loan_product.maximum_loan_amount",
    "fieldname": "loan_amount",
@@ -166,6 +169,7 @@
    "read_only": 1
   },
   {
+   "default": "0",
    "depends_on": "is_term_loan",
    "fieldname": "total_payable_interest",
    "fieldtype": "Currency",
@@ -178,6 +182,7 @@
    "fieldtype": "Column Break"
   },
   {
+   "default": "0",
    "depends_on": "repayment_method",
    "fieldname": "repayment_amount",
    "fieldtype": "Currency",
@@ -192,6 +197,7 @@
    "mandatory_depends_on": "eval: doc.repayment_method == \"Repay Fixed Amount per Period\";"
   },
   {
+   "default": "0",
    "fieldname": "total_payable_amount",
    "fieldtype": "Currency",
    "label": "Total Payable Amount",
@@ -228,6 +234,7 @@
    "options": "Proposed Pledge"
   },
   {
+   "default": "0",
    "fieldname": "maximum_loan_amount",
    "fieldtype": "Currency",
    "label": "Maximum Loan Amount",
@@ -314,8 +321,10 @@
   },
   {
    "fieldname": "loan_utilization",
-   "fieldtype": "Data",
-   "label": "Loan Utilization"
+   "fieldtype": "Select",
+   "label": "Loan Utilization",
+   "options": "\nAgriculture\nLivestock & Dairy\nPoultry Farming\nRenewable Energy\nRetail & Wholesale\nEducation\nHealth\nSmall Business\nMedium Business\nWomen Entrepreneur",
+   "reqd": 1
   },
   {
    "fieldname": "iban_no",
@@ -338,12 +347,18 @@
    "fieldtype": "Data",
    "label": "Risk Officer Name",
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "update_record",
+   "fieldtype": "Check",
+   "label": "update record"
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-15 13:24:41.345253",
+ "modified": "2026-03-26 16:11:12.182225",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Application",

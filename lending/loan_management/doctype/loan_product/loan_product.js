@@ -1,7 +1,23 @@
 // Copyright (c) 2019, Frappe Technologies Pvt. Ltd. and contributors
 // For license information, please see license.txt
 
+
+function calculate_loan_charges(frm) {
+	const loan_amount = frm.doc.maximum_loan_amount;
+
+	frm.doc.loan_charges?.forEach(row => {
+		const { percentage } = row;
+		if (flt(percentage) > 0) {
+			let value = (flt(loan_amount) / 100) * flt(percentage)
+			frappe.model.set_value(row.doctype, row.name, "amount", value)
+			console.log(row, value)
+		}
+	})
+}
 frappe.ui.form.on('Loan Product', {
+	validate(frm) {
+		calculate_loan_charges(frm)
+	},
 	setup(frm) {
 		frm.add_fetch("company", "min_days_bw_disbursement_first_repayment", "min_days_bw_disbursement_first_repayment");
 	},
@@ -37,26 +53,13 @@ frappe.ui.form.on('Loan Product', {
 	}
 });
 
+
 frappe.ui.form.on('Loan Charges', {
+	percentage(frm, cdt, cdn) {
+		calculate_loan_charges(frm)
+	},
 	charge_type: function (frm, cdt, cdn) {
-		const row = locals[cdt][cdn];
-
-		if (!row.charge_type)
-			return;
-
-		frappe.call({
-			method: "lending.loan_management.doctype.loan_product.loan_product.get_default_charge_accounts",
-			args: {
-				charge_type: row.charge_type,
-				company: frm.doc.company,
-			},
-			callback: function (r) {
-				if (r.message) {
-					for (const account_field in r.message) {
-						frappe.model.set_value(row.doctype, row.name, account_field, r.message[account_field]);
-					}
-				}
-			}
-		});
+		frappe.model.set_value(cdt, cdn, "percentage", 0)
+		frappe.model.set_value(cdt, cdn, "amount", 0)
 	},
 });

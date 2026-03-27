@@ -34,7 +34,7 @@ class LoanApplication(Document):
             self.validate_repayment_method()
 
         self.validate_loan_product()
-        self.validate_employee()
+        # self.validate_employee()
 
         self.get_repayment_details()
         self.check_sanctioned_amount_limit()

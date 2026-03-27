@@ -5,7 +5,7 @@
    "label": "New Loans"
   }
  ],
- "content": "[{\"id\":\"E8SmPtkFHv\",\"type\":\"chart\",\"data\":{\"chart_name\":\"New Loans\",\"col\":12}},{\"id\":\"_38WStznya\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Your Shortcuts</b></span>\",\"col\":12}},{\"id\":\"FnMXBOAVyS\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Company\",\"col\":3}},{\"id\":\"t7o_K__1jB\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Loan Application\",\"col\":3}},{\"id\":\"IRiNDC6w1p\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Loan\",\"col\":3}},{\"id\":\"xbbo0FYbq0\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Dashboard\",\"col\":3}},{\"id\":\"NQGa6JiNfC\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Customer\",\"col\":3}},{\"id\":\"7ZL4Bro-Vi\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"yhyioTViZ3\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Reports &amp; Masters</b></span>\",\"col\":12}},{\"id\":\"_lmThapERd\",\"type\":\"card\",\"data\":{\"card_name\":\"Master\",\"col\":4}},{\"id\":\"oYFn4b1kSw\",\"type\":\"card\",\"data\":{\"card_name\":\"Loan\",\"col\":4}},{\"id\":\"vZepJF5tl9\",\"type\":\"card\",\"data\":{\"card_name\":\"Loan Processes\",\"col\":4}},{\"id\":\"k-393Mjhqe\",\"type\":\"card\",\"data\":{\"card_name\":\"Disbursement and Repayment\",\"col\":4}},{\"id\":\"Um5YwxVLRJ\",\"type\":\"card\",\"data\":{\"card_name\":\"Reports\",\"col\":4}},{\"id\":\"cC9JraXgnP\",\"type\":\"card\",\"data\":{\"card_name\":\"Loan Classification\",\"col\":4}},{\"id\":\"wH0P6qZKNg\",\"type\":\"card\",\"data\":{\"card_name\":\"Banking\",\"col\":4}}]",
+ "content": "[{\"id\":\"E8SmPtkFHv\",\"type\":\"chart\",\"data\":{\"chart_name\":\"New Loans\",\"col\":12}},{\"id\":\"_38WStznya\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Your Shortcuts</b></span>\",\"col\":12}},{\"id\":\"FnMXBOAVyS\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Company\",\"col\":3}},{\"id\":\"t7o_K__1jB\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Loan Application\",\"col\":3}},{\"id\":\"IRiNDC6w1p\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Loan\",\"col\":3}},{\"id\":\"xbbo0FYbq0\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Dashboard\",\"col\":3}},{\"id\":\"NQGa6JiNfC\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Customer\",\"col\":3}},{\"id\":\"yhyioTViZ3\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Reports &amp; Masters</b></span>\",\"col\":12}},{\"id\":\"_lmThapERd\",\"type\":\"card\",\"data\":{\"card_name\":\"Master\",\"col\":4}},{\"id\":\"oYFn4b1kSw\",\"type\":\"card\",\"data\":{\"card_name\":\"Loan\",\"col\":4}},{\"id\":\"vZepJF5tl9\",\"type\":\"card\",\"data\":{\"card_name\":\"Loan Processes\",\"col\":4}},{\"id\":\"k-393Mjhqe\",\"type\":\"card\",\"data\":{\"card_name\":\"Disbursement and Repayment\",\"col\":4}},{\"id\":\"Um5YwxVLRJ\",\"type\":\"card\",\"data\":{\"card_name\":\"Reports\",\"col\":4}},{\"id\":\"wH0P6qZKNg\",\"type\":\"card\",\"data\":{\"card_name\":\"Banking\",\"col\":4}}]",
  "creation": "2020-03-12 16:35:55.299820",
  "custom_blocks": [],
  "docstatus": 0,
@@ -17,242 +17,6 @@
  "is_hidden": 0,
  "label": "Loans",
  "links": [
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Processes",
-   "link_count": 0,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Process Loan Security Shortfall",
-   "link_count": 0,
-   "link_to": "Process Loan Security Shortfall",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Process Loan Interest Accrual",
-   "link_count": 0,
-   "link_to": "Process Loan Interest Accrual",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Disbursement and Repayment",
-   "link_count": 0,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Disbursement",
-   "link_count": 0,
-   "link_to": "Loan Disbursement",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Repayment",
-   "link_count": 0,
-   "link_to": "Loan Repayment",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Write Off",
-   "link_count": 0,
-   "link_to": "Loan Write Off",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Interest Accrual",
-   "link_count": 0,
-   "link_to": "Loan Interest Accrual",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Security Type",
-   "link_count": 0,
-   "link_to": "Loan Security Type",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Security Price",
-   "link_count": 0,
-   "link_to": "Loan Security Price",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Security",
-   "link_count": 0,
-   "link_to": "Loan Security",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Security Pledge",
-   "link_count": 0,
-   "link_to": "Loan Security Pledge",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Security Unpledge",
-   "link_count": 0,
-   "link_to": "Loan Security Unpledge",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Security Shortfall",
-   "link_count": 0,
-   "link_to": "Loan Security Shortfall",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Reports",
-   "link_count": 6,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "Loan Repayment and Closure",
-   "link_count": 0,
-   "link_to": "Loan Repayment and Closure",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "dependencies": "",
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "Loan Security Status",
-   "link_count": 0,
-   "link_to": "Loan Security Status",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "Loan Interest Report",
-   "link_count": 0,
-   "link_to": "Loan Interest Report",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "Loan Security Exposure",
-   "link_count": 0,
-   "link_to": "Loan Security Exposure",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "Applicant-Wise Loan Security Exposure",
-   "link_count": 0,
-   "link_to": "Applicant-Wise Loan Security Exposure",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "Loan Security Status",
-   "link_count": 0,
-   "link_to": "Loan Security Status",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Classification",
-   "link_count": 1,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Loan Classification",
-   "link_count": 0,
-   "link_to": "Loan Classification",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
   {
    "hidden": 0,
    "is_query_report": 0,
@@ -350,9 +114,130 @@
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Disbursement and Repayment",
+   "link_count": 5,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Loan Disbursement",
+   "link_count": 0,
+   "link_to": "Loan Disbursement",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Loan Repayment",
+   "link_count": 0,
+   "link_to": "Loan Repayment",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Loan Interest Accrual",
+   "link_count": 0,
+   "link_to": "Loan Interest Accrual",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Loan Repayment Schedule",
+   "link_count": 0,
+   "link_to": "Loan Repayment Schedule",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Loan Reschedule",
+   "link_count": 0,
+   "link_to": "Loan Reschedule",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Loan Processes",
+   "link_count": 1,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Process Loan Interest Accrual",
+   "link_count": 0,
+   "link_to": "Process Loan Interest Accrual",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Reports",
+   "link_count": 3,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Borrower Statement",
+   "link_count": 0,
+   "link_to": "Borrower Statement",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Portfolio at Risk (PAR)",
+   "link_count": 0,
+   "link_to": "Portfolio at Risk",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "General Ledger",
+   "link_count": 0,
+   "link_to": "General Ledger",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
   }
  ],
- "modified": "2026-03-11 06:45:02.984568",
+ "modified": "2026-03-25 23:04:27.506614",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loans",

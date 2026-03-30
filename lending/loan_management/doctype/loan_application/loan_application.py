@@ -24,10 +24,23 @@ from lending.loan_management.doctype.loan_security_price.loan_security_price imp
 
 
 class LoanApplication(Document):
+    def set_missing_values(self):
+        loan_product = frappe.get_doc("Loan Product", self.loan_product)
+
+        self.loan_amount = loan_product.maximum_loan_amount
+        self.repayment_method = loan_product.repayment_method
+        self.repayment_periods = loan_product.repayment_periods
+        self.repayment_amount = loan_product.repayment_amount
+
+
+    def on_submit(self):
+        self.status = "Approved"
+
     def validate(self):
+        self.set_missing_values()
 
         # self.set_pledge_amount()
-        # self.set_loan_amount()
+        self.set_loan_amount()
         self.validate_loan_amount()
 
         if self.is_term_loan:
@@ -218,6 +231,12 @@ class LoanApplication(Document):
             self.total_payable_amount = self.loan_amount
 
     def calculate_payable_amount(self):
+        if not self.repayment_amount:
+            frappe.throw("Loan Repayment amount is not set")
+
+        if not self.rate_of_interest:
+            frappe.throw("Rate interest cannot be 0")
+            
         balance_amount = self.loan_amount
         self.total_payable_amount = 0
         self.total_payable_interest = 0

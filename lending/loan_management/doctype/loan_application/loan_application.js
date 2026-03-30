@@ -22,19 +22,19 @@ frappe.ui.form.on('Loan Application', {
 			return;
 		}
 
-		frappe.validated = false;
-		navigator.geolocation.getCurrentPosition(
-			(position) => {
-				frm.set_value("latitude", position.coords.latitude);
-				frm.set_value("longitude", position.coords.longitude);
-				frm.save();
-			},
-			() => {
-				frappe.throw(__(
-					"Could not fetch geolocation. Please allow location access and save the document again."
-				));
-			}
-		);
+		// frappe.validated = false;
+		// navigator.geolocation.getCurrentPosition(
+		// 	(position) => {
+		// 		frm.set_value("latitude", position.coords.latitude);
+		// 		frm.set_value("longitude", position.coords.longitude);
+		// 		frm.save();
+		// 	},
+		// 	() => {
+		// 		frappe.throw(__(
+		// 			"Could not fetch geolocation. Please allow location access and save the document again."
+		// 		));
+		// 	}
+		// );
 	},
 	setup: function (frm) {
 
@@ -42,17 +42,17 @@ frappe.ui.form.on('Loan Application', {
 			// ÷÷			frm.set_df_property('title', 'reqd', 1)
 
 			frm.set_df_property("map_display", "options", `
-  <div style="width:100%;">
-    <iframe
-      width="100%"
-      height="500"
-      style="border:0;"
-      loading="lazy"
-      allowfullscreen
-      src="https://maps.google.com/maps?q=${frm.doc.latitude},${frm.doc.longitude}&z=15&output=embed">
-    </iframe>
-  </div>
-`)
+	<div style="width:100%;">
+		<iframe
+		width="100%"
+		height="500"
+		style="border:0;"
+		loading="lazy"
+		allowfullscreen
+		src="https://maps.google.com/maps?q=${frm.doc.latitude},${frm.doc.longitude}&z=15&output=embed">
+		</iframe>
+	</div>
+	`)
 		}
 		// if (frm.is_new() || !frm.doc.guarantor.length == 2) {
 		// 	frm.doc.guarantor = []

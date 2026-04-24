@@ -1,0 +1,423 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "naming_series:",
+ "creation": "2026-04-04 01:45:15.674172",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "test_run",
+  "column_break_zblz",
+  "status",
+  "section_files",
+  "customer_file",
+  "column_break_1",
+  "disbursement_file",
+  "repayment_file",
+  "section_config",
+  "company",
+  "branch",
+  "column_break_2",
+  "sales_person",
+  "mode_of_payment",
+  "section_accounts",
+  "disbursement_account",
+  "payment_account",
+  "loan_account",
+  "charges_income_account",
+  "charge_item",
+  "column_break_3",
+  "interest_income_account",
+  "interest_receivable_account",
+  "penalty_income_account",
+  "penalty_receivable_account",
+  "section_options",
+  "migrate_customers",
+  "migrate_loans",
+  "migrate_disbursements",
+  "column_break_4",
+  "migrate_historical_loans",
+  "migrate_repayments",
+  "historical_loan_product",
+  "section_status",
+  "last_run",
+  "last_status",
+  "column_break_5",
+  "customers_created",
+  "loans_created",
+  "historical_loans_created",
+  "repayments_created",
+  "errors_count",
+  "section_log",
+  "migration_log",
+  "amended_from",
+  "naming_series"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_files",
+   "fieldtype": "Section Break",
+   "label": "Excel Files"
+  },
+  {
+   "description": "Upload Customer Data.xlsx",
+   "fieldname": "customer_file",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "Customer Data File",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Upload Disbursement Data.xlsx",
+   "fieldname": "disbursement_file",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "Disbursement Data File",
+   "reqd": 1
+  },
+  {
+   "description": "Upload Repayment Data.xlsx",
+   "fieldname": "repayment_file",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "Repayment Data File",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_config",
+   "fieldtype": "Section Break",
+   "label": "Configuration"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "label": "Branch",
+   "options": "Branch",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Used when loan officer is not in the file",
+   "fieldname": "sales_person",
+   "fieldtype": "Link",
+   "label": "Default Sales Person",
+   "options": "Sales Person",
+   "reqd": 1
+  },
+  {
+   "default": "Cash",
+   "fieldname": "mode_of_payment",
+   "fieldtype": "Link",
+   "label": "Mode of Payment",
+   "options": "Mode of Payment",
+   "reqd": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_accounts",
+   "fieldtype": "Section Break",
+   "label": "GL Accounts"
+  },
+  {
+   "fieldname": "disbursement_account",
+   "fieldtype": "Link",
+   "label": "Disbursement Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "payment_account",
+   "fieldtype": "Link",
+   "label": "Payment Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "loan_account",
+   "fieldtype": "Link",
+   "label": "Loan Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "interest_income_account",
+   "fieldtype": "Link",
+   "label": "Interest Income Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "interest_receivable_account",
+   "fieldtype": "Link",
+   "label": "Interest Receivable Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "penalty_income_account",
+   "fieldtype": "Link",
+   "label": "Penalty Income Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "penalty_receivable_account",
+   "fieldtype": "Link",
+   "label": "Penalty Receivable Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_options",
+   "fieldtype": "Section Break",
+   "label": "Migration Options"
+  },
+  {
+   "default": "1",
+   "fieldname": "migrate_customers",
+   "fieldtype": "Check",
+   "label": "Migrate Customers"
+  },
+  {
+   "default": "1",
+   "fieldname": "migrate_loans",
+   "fieldtype": "Check",
+   "label": "Migrate Loans"
+  },
+  {
+   "default": "1",
+   "fieldname": "migrate_disbursements",
+   "fieldtype": "Check",
+   "label": "Migrate Disbursements"
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "Create closed loan records for repayments with no matching active loan",
+   "fieldname": "migrate_historical_loans",
+   "fieldtype": "Check",
+   "label": "Migrate Historical Loans"
+  },
+  {
+   "default": "1",
+   "fieldname": "migrate_repayments",
+   "fieldtype": "Check",
+   "label": "Migrate Repayments"
+  },
+  {
+   "description": "Loan product to assign to historical closed loans",
+   "fieldname": "historical_loan_product",
+   "fieldtype": "Link",
+   "label": "Historical Loan Product",
+   "options": "Loan Product"
+  },
+  {
+   "fieldname": "section_status",
+   "fieldtype": "Section Break",
+   "label": "Migration Status"
+  },
+  {
+   "fieldname": "last_run",
+   "fieldtype": "Datetime",
+   "label": "Last Run",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_status",
+   "fieldtype": "Select",
+   "label": "Last Status",
+   "no_copy": 1,
+   "options": "\nPending\nRunning\nCompleted\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_5",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "customers_created",
+   "fieldtype": "Int",
+   "label": "Customers Created",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "loans_created",
+   "fieldtype": "Int",
+   "label": "Active Loans Created",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "historical_loans_created",
+   "fieldtype": "Int",
+   "label": "Historical Loans Created",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "repayments_created",
+   "fieldtype": "Int",
+   "label": "Repayments Created",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "errors_count",
+   "fieldtype": "Int",
+   "label": "Total Errors",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_log",
+   "fieldtype": "Section Break",
+   "label": "Migration Log"
+  },
+  {
+   "fieldname": "migration_log",
+   "fieldtype": "Long Text",
+   "label": "Log",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "no_copy": 1,
+   "options": "Draft\nQueued\nRunning\nCompleted\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_zblz",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "test_run",
+   "fieldtype": "Check",
+   "label": "Test Run"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Data Migration Tool",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "default": "DM-",
+   "fieldname": "naming_series",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "naming_series",
+   "read_only": 1
+  },
+  {
+   "fieldname": "charges_income_account",
+   "fieldtype": "Link",
+   "label": "Charges Income Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "charge_item",
+   "fieldtype": "Link",
+   "label": "Charge Item",
+   "options": "Item"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-04-09 11:40:37.881137",
+ "modified_by": "Administrator",
+ "module": "Loan Management",
+ "name": "Data Migration Tool",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Loan Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

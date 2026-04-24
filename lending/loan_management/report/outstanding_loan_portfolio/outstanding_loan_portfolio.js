@@ -3,13 +3,13 @@
 
 frappe.query_reports["Outstanding Loan Portfolio"] = {
 	"filters": [
-		{
-			"fieldname": "as_of_date",
-			"label": "As Of Date",
-			"fieldtype": "Date",
-			"default": "Today",
-			"reqd": 1
-		},
+		// {
+		// 	"fieldname": "as_of_date",
+		// 	"label": "As Of Date",
+		// 	"fieldtype": "Date",
+		// 	"default": "Today",
+		// 	"reqd": 1
+		// },
 		{
 			"fieldname": "branch",
 			"label": "Branch",
@@ -38,12 +38,18 @@ frappe.query_reports["Outstanding Loan Portfolio"] = {
 			"options": "\nRegular\nOverdue\nMissed Repayment\nArrears\nPast Maturity",
 			"reqd": 0
 		},
+		// {
+		// 	"fieldname": "npa_only",
+		// 	"label": "NPA Only",
+		// 	"fieldtype": "Check",
+		// 	"default": 0,
+		// 	"reqd": 0
+		// },
 		{
-			"fieldname": "npa_only",
-			"label": "NPA Only",
-			"fieldtype": "Check",
-			"default": 0,
-			"reqd": 0
-		}
+            "fieldname": "loan",
+            "label": __("Loan Account"),
+            "fieldtype": "Link",
+            "options": "Loan"
+        },
 	]
 };

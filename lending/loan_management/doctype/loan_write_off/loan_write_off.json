@@ -14,6 +14,10 @@
   "posting_date",
   "accounting_dimensions_section",
   "cost_center",
+  "section_break_wtyw",
+  "write_off_penalty_amount",
+  "write_off_interest_amount",
+  "write_off_principal_amount",
   "section_break_9",
   "write_off_account",
   "column_break_11",
@@ -111,12 +115,31 @@
    "options": "Loan Write Off",
    "print_hide": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "section_break_wtyw",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "write_off_penalty_amount",
+   "fieldtype": "Currency",
+   "label": "Penalty Write-Off Amount"
+  },
+  {
+   "fieldname": "write_off_interest_amount",
+   "fieldtype": "Currency",
+   "label": "Interest Write-Off Amount"
+  },
+  {
+   "fieldname": "write_off_principal_amount",
+   "fieldtype": "Currency",
+   "label": "Principal Write-Off Amount"
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2021-04-19 18:11:27.759862",
+ "modified": "2026-04-09 15:44:34.734891",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Write Off",
@@ -153,7 +176,9 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
+ "states": [],
  "track_changes": 1
 }

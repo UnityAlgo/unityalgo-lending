@@ -837,8 +837,8 @@ class LoanRepayment(AccountsController):
                 loan.total_amount_paid,
                 loan.total_principal_paid,
                 loan.status,
-                self.against_loan,
                 pending_principal_amount,
+                self.against_loan,
             ),
         )
 

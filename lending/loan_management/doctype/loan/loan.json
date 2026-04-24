@@ -72,27 +72,30 @@
   "manual_npa",
   "amended_from",
   "section_break_mcea",
-  "repayment_schedule_name"
+  "repayment_schedule_name",
+  "description"
  ],
  "fields": [
   {
    "default": "Customer",
    "fieldname": "applicant_type",
    "fieldtype": "Select",
+   "hidden": 1,
    "label": "Applicant Type",
    "options": "Customer\nEmployee",
-   "read_only": 1,
-   "reqd": 1
+   "read_only": 1
   },
   {
    "fieldname": "applicant",
-   "fieldtype": "Dynamic Link",
+   "fieldtype": "Link",
    "in_standard_filter": 1,
    "label": "Applicant",
-   "options": "applicant_type",
+   "options": "Customer",
    "reqd": 1
   },
   {
+   "allow_on_submit": 1,
+   "fetch_from": "applicant.customer_name",
    "fieldname": "applicant_name",
    "fieldtype": "Data",
    "in_global_search": 1,
@@ -146,7 +149,7 @@
    "in_standard_filter": 1,
    "label": "Status",
    "no_copy": 1,
-   "options": "Sanctioned\nPartially Disbursed\nDisbursed\nLoan Closure Requested\nClosed",
+   "options": "Sanctioned\nPartially Disbursed\nDisbursed\nLoan Closure Requested\nClosed\nWrite-Off",
    "read_only": 1
   },
   {
@@ -207,7 +210,6 @@
   },
   {
    "depends_on": "is_term_loan",
-   "fetch_from": "loan_application.repayment_amount",
    "fetch_if_empty": 1,
    "fieldname": "monthly_repayment_amount",
    "fieldtype": "Currency",
@@ -510,7 +512,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Repayment Status",
-   "options": "Regular\nOverdue\nMissed Repayment\nArrears\nPast Maturity",
+   "options": "Regular\nOverdue\nMissed Repayment\nArrears\nPast Maturity\nDue Today\nWrite-Off\nFully Paid",
    "read_only": 1
   },
   {
@@ -567,12 +569,17 @@
    "no_copy": 1,
    "options": "Company:company:default_currency",
    "read_only": 1
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "description"
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-25 09:55:15.995368",
+ "modified": "2026-04-13 03:28:37.995129",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan",

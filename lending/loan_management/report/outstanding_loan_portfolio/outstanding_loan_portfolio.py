@@ -1,40 +1,4 @@
-# Copyright (c) 2024, Your Organization
-# Outstanding Loan Portfolio (OLP) — Principal Amount & Active Clients
-#
-# Aligned to customized lending.loan_management.doctype.loan_repayment.loan_repayment
-#
-# OLP principal source:  get_pending_principal_amount() in loan_repayment.py
-#
-#   If fully disbursed (status=Disbursed/Closed OR disbursed_amount >= loan_amount):
-#       OLP = total_payment + debit_adjustment_amount
-#             - credit_adjustment_amount
-#             - total_principal_paid
-#             - total_interest_payable
-#             - written_off_amount
-#             + refund_amount
-#
-#   If partially disbursed:
-#       OLP = disbursed_amount + debit_adjustment_amount
-#             - credit_adjustment_amount
-#             - total_principal_paid
-#             - total_interest_payable
-#             - written_off_amount
-#             + refund_amount
-#
-# Status inclusion logic (from on_submit / on_cancel / update_paid_amount):
-#   - 'Disbursed'               → active, fully disbursed loans
-#   - 'Partially Disbursed'     → active, partially released loans
-#   - 'Loan Closure Requested'  → principal ≈ 0 but awaiting manual approval
-#                                 (non-employee loans land here before 'Closed')
-#   - 'Closed'                  → excluded (principal = 0, fully settled)
-#
-# Repayment status (update_loan_repayment_status in loan_repayment.py):
-#   Regular / Overdue (1-29d) / Missed Repayment (30+d) / Arrears / Past Maturity
-#
-# JIT accruals (book_unaccrued_interest) do NOT affect outstanding principal —
-# they only move amounts into the interest receivable ledger.  OLP is driven
-# entirely by total_principal_paid on tabLoan, which update_paid_amount() keeps
-# current after every repayment submission / cancellation.
+# Copyright (c) 2026, UnityAlgo
 
 import frappe
 from frappe import _
@@ -53,9 +17,6 @@ def execute(filters=None):
     return columns, data, None, None, summary
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# COLUMNS
-# ─────────────────────────────────────────────────────────────────────────────
 def get_columns():
     return [
         {
@@ -155,9 +116,6 @@ def get_columns():
     ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA
-# ─────────────────────────────────────────────────────────────────────────────
 def get_data(filters):
     conditions = get_conditions(filters)
     loans = fetch_loans(filters, conditions)
@@ -206,33 +164,18 @@ def fetch_loans(filters, conditions):
 
             -- OLP mirrors get_pending_principal_amount() exactly
             ROUND(
-                CASE
-                    WHEN l.status IN ('Disbursed', 'Closed')
-                         OR IFNULL(l.disbursed_amount, 0) >= IFNULL(l.loan_amount, 0)
-                    THEN (
-                          IFNULL(l.total_payment, 0)
-                        + IFNULL(l.debit_adjustment_amount, 0)
-                        - IFNULL(l.credit_adjustment_amount, 0)
-                        - IFNULL(l.total_principal_paid, 0)
-                        - IFNULL(l.total_interest_payable, 0)
-                        - IFNULL(l.written_off_amount, 0)
-                        + IFNULL(l.refund_amount, 0)
-                    )
-                    ELSE (
-                          IFNULL(l.disbursed_amount, 0)
-                        + IFNULL(l.debit_adjustment_amount, 0)
-                        - IFNULL(l.credit_adjustment_amount, 0)
-                        - IFNULL(l.total_principal_paid, 0)
-                        - IFNULL(l.total_interest_payable, 0)
-                        - IFNULL(l.written_off_amount, 0)
-                        + IFNULL(l.refund_amount, 0)
-                    )
-                END,
+                (
+                      IFNULL(l.disbursed_amount, 0)
+                    + IFNULL(l.debit_adjustment_amount, 0)
+                    - IFNULL(l.credit_adjustment_amount, 0)
+                    - IFNULL(l.total_principal_paid, 0)
+                    - IFNULL(l.written_off_amount, 0)
+                    + IFNULL(l.refund_amount, 0)
+                ),
                 {precision}
             ) AS outstanding_principal
 
         FROM `tabLoan` l
-
         WHERE
             l.docstatus = 1
             AND l.status IN (
@@ -240,12 +183,8 @@ def fetch_loans(filters, conditions):
                 'Partially Disbursed',
                 'Loan Closure Requested'
             )
-            AND (
-                l.disbursement_date IS NULL
-                OR l.disbursement_date <= %(as_of_date)s
-            )
+            -- AND l.disbursement_date <= %(as_of_date)s
             {conditions}
-
         ORDER BY
             l.branch,
             l.loan_product,
@@ -255,11 +194,15 @@ def fetch_loans(filters, conditions):
         conditions=conditions,
     )
 
-    return frappe.db.sql(sql, filters, as_dict=True)
+    return frappe.db.sql(sql, filters, as_dict=True, debug=True)
 
 
 def get_conditions(filters):
     conditions = []
+
+    # --- ADD THIS BLOCK ---
+    if filters.get("loan"):
+        conditions.append("AND l.name = %(loan)s")
 
     if filters.get("branch"):
         conditions.append("AND l.branch = %(branch)s")
@@ -282,10 +225,6 @@ def get_conditions(filters):
     return " ".join(conditions)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GROUPING & SUBTOTALS
-# Branch > Loan Product > Detail rows > Loan-Product subtotal > Branch total
-# ─────────────────────────────────────────────────────────────────────────────
 def build_grouped_rows(loans):
     from itertools import groupby
 
@@ -319,14 +258,11 @@ def build_grouped_rows(loans):
             product_written_off = sum(flt(r.written_off_amount) for r in product_rows)
             product_clients = len(product_rows)
 
-            # ── Detail rows ──
             for row in product_rows:
-                # Flag closure-requested loans visually
                 if row.status == "Loan Closure Requested":
                     row["_closure_pending"] = 1
                 result.append(row)
 
-            # ── Loan Product subtotal ──
             result.append(
                 frappe._dict(
                     {
@@ -352,7 +288,6 @@ def build_grouped_rows(loans):
             branch_written_off += product_written_off
             branch_clients += product_clients
 
-        # ── Branch total ──
         result.append(
             frappe._dict(
                 {
@@ -374,11 +309,7 @@ def build_grouped_rows(loans):
     return result
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SUMMARY CARDS
-# ─────────────────────────────────────────────────────────────────────────────
 def get_summary(data):
-    # Only actual loan rows (not subtotal / branch-total rows)
     detail_rows = [r for r in data if r.get("name")]
 
     total_olp = sum(flt(r.outstanding_principal) for r in detail_rows)
@@ -387,9 +318,6 @@ def get_summary(data):
     total_written_off = sum(flt(r.written_off_amount) for r in detail_rows)
     active_clients = len(detail_rows)
 
-    # NPA count — is_npa=1 OR manual_npa=1 (mirrors on_cancel NPA reversal logic)
-    npa_clients = sum(1 for r in detail_rows if r.get("is_npa") or r.get("manual_npa"))
-
     # Closure pending — 'Loan Closure Requested' (non-employee loans after full repayment)
     closure_pending = sum(
         1 for r in detail_rows if r.get("status") == "Loan Closure Requested"
@@ -397,7 +325,13 @@ def get_summary(data):
 
     # OLP at risk — any repayment_status set by update_loan_repayment_status()
     # that indicates the client is behind: Overdue, Missed Repayment, Arrears, Past Maturity
-    at_risk_statuses = {"Overdue", "Missed Repayment", "Arrears", "Past Maturity"}
+    at_risk_statuses = {
+        "Overdue",
+        "Missed Repayment",
+        "Arrears",
+        "Past Maturity",
+        "Due Today",
+    }
     overdue_olp = sum(
         flt(r.outstanding_principal)
         for r in detail_rows
@@ -439,12 +373,6 @@ def get_summary(data):
             "value": overdue_olp,
             "label": _("OLP at Risk (Overdue / Arrears / Past Maturity)"),
             "datatype": "Currency",
-            "indicator": "red",
-        },
-        {
-            "value": npa_clients,
-            "label": _("NPA Clients"),
-            "datatype": "Int",
             "indicator": "red",
         },
         {

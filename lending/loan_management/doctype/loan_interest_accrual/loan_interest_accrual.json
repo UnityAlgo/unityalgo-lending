@@ -15,6 +15,7 @@
   "loan_account",
   "column_break_4",
   "company",
+  "cost_center",
   "posting_date",
   "due_date",
   "accrual_type",
@@ -33,7 +34,8 @@
   "process_loan_interest_accrual",
   "repayment_schedule_name",
   "last_accrual_date",
-  "amended_from"
+  "amended_from",
+  "date_of_accrual"
  ],
  "fields": [
   {
@@ -115,7 +117,8 @@
    "fieldname": "company",
    "fieldtype": "Link",
    "label": "Company",
-   "options": "Company"
+   "options": "Company",
+   "reqd": 1
   },
   {
    "default": "0",
@@ -222,17 +225,29 @@
    "label": "Branch",
    "options": "Branch",
    "read_only": 1
+  },
+  {
+   "fetch_from": "loan.company",
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Company"
+  },
+  {
+   "fieldname": "date_of_accrual",
+   "fieldtype": "Date",
+   "label": "date_of_accrual"
   }
  ],
  "in_create": 1,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-15 06:30:19.978219",
+ "modified": "2026-04-10 15:34:19.616577",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Interest Accrual",
- "naming_rule": "Expression (old style)",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {

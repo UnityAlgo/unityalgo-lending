@@ -7,6 +7,7 @@
  "field_order": [
   "no_of_guarantors_required",
   "allow_multi_loaning_for_each_customer",
+  "enable_loan_amount_editing",
   "column_break_ceiv",
   "max_active_loans_per_guarantor"
  ],
@@ -38,13 +39,19 @@
    "fieldname": "allow_multi_loaning_for_each_customer",
    "fieldtype": "Check",
    "label": "Allow Multi Loaning for Each Customer"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_loan_amount_editing",
+   "fieldtype": "Check",
+   "label": "Enable Loan Amount Editing"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-03-12 12:30:48.067686",
+ "modified": "2026-04-03 19:23:53.411466",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "LMS Settings",

@@ -185,9 +185,9 @@ frappe.ui.form.on('Loan', {
 			// }
 
 			if (["Loan Closure Requested", "Disbursed", "Partially Disbursed"].includes(frm.doc.status)) {
-				// frm.add_custom_button(__('Loan Write Off'), function() {
-				// 	frm.trigger("make_loan_write_off_entry");
-				// },__('Create'));
+				frm.add_custom_button(__('Loan Write Off'), function() {
+					frm.trigger("make_loan_write_off_entry");
+				},__('Create'));
 
 				// frm.add_custom_button(__('Loan Refund'), function () {
 				// 	frm.trigger("make_loan_refund");

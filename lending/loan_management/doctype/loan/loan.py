@@ -28,11 +28,20 @@ from lending.loan_management.doctype.loan_security_unpledge.loan_security_unpled
 
 
 class Loan(AccountsController):
+    def set_repayment_start_date(self):
+        from dateutil.relativedelta import relativedelta
+
+        if self.posting_date:
+            self.repayment_start_date = getdate(self.posting_date) + relativedelta(
+                months=1
+            )
+
     def validate(self):
+        self.set_repayment_start_date()
+        self.set_missing_fields()
         self.update_repayment_schedule()
         self.set_loan_amount()
         self.validate_loan_amount()
-        self.set_missing_fields()
         self.validate_loan_product()
         self.validate_employee()
         self.validate_cost_center()
@@ -140,8 +149,9 @@ class Loan(AccountsController):
             self.repayment_start_date = cyclic_date
 
     def on_submit(self):
-        self.link_loan_security_pledge()
+        # self.link_loan_security_pledge()
         # Interest accrual for backdated term loans
+
         self.accrue_loan_interest()
         self.submit_draft_schedule()
 
@@ -175,13 +185,13 @@ class Loan(AccountsController):
         self.reload()
 
     def set_repayment_status(self):
-        if self.status == "Closed":
+        if self.status in ("Closed", "Loan Closure Requested"):
+            self.db_set("repayment_status", "Fully Paid")
+            self.db_set("overdue_days", 0)
             return
 
         precision = cint(frappe.db.get_default("currency_precision")) or 2
         current_date = getdate()
-        new_status = "Regular"
-        overdue_days = 0
 
         schedule_id = frappe.db.get_value(
             "Loan Repayment Schedule",
@@ -192,95 +202,106 @@ class Loan(AccountsController):
             return
 
         schedule = frappe.db.sql(
-            f"select name, payment_date, interest_amount, principal_amount, is_accrued from `tabRepayment Schedule` where parent='{schedule_id}' order by idx asc",
+            f"""SELECT name, payment_date, interest_amount, principal_amount
+                FROM `tabRepayment Schedule`
+                WHERE parent = '{schedule_id}'
+                ORDER BY idx ASC""",
             as_dict=True,
         )
-        # schedule = frappe.db.get_all(
-        #     "Repayment Schedule",
-        #     filters={"parent": schedule_id},
-        #     fields=[
-        #         "name",
-        #         "payment_date",
-        #         "interest_amount",
-        #         "principal_amount",
-        #         "is_accrued",
-        #     ],
-        #     order_by="idx asc",
-        # )
-
         if not schedule:
             return
 
         maturity_date = schedule[-1].payment_date
-        past_due_rows = 0
-        has_partial_payment = False
-        oldest_unpaid_date = None
 
-        lia_totals = frappe.db.sql(
-            """
-            SELECT
-                due_date,
-                SUM(paid_interest_amount) as total_paid_int,
-                SUM(paid_principal_amount) as total_paid_prin
-            FROM `tabLoan Interest Accrual`
-            WHERE loan = %s AND docstatus = 1
-            GROUP BY due_date
-            """,
-            (self.name,),
-            as_dict=1,
+        loan_totals = (
+            frappe.db.get_value(
+                "Loan",
+                self.name,
+                ["total_principal_paid", "total_interest_paid"],
+                as_dict=True,
+            )
+            or {}
         )
 
-        paid_by_date = {}
-        for row in lia_totals:
-            paid_by_date[getdate(row.due_date)] = {
-                "paid_int": flt(row.total_paid_int, precision),
-                "paid_prin": flt(row.total_paid_prin, precision),
-            }
+        remaining_prin = flt(loan_totals.get("total_principal_paid") or 0, precision)
+        remaining_int = flt(loan_totals.get("total_interest_paid") or 0, precision)
+
+        # ── 4. Walk schedule: determine which rows are fully satisfied ─────────
+        past_due_rows = 0
+        has_partial = False
+        oldest_unpaid = None
 
         for sch in schedule:
             sch_date = getdate(sch.payment_date)
-            paid_data = paid_by_date.get(sch_date, {"paid_int": 0, "paid_prin": 0})
+            sch_prin = flt(sch.principal_amount, precision)
+            sch_int = flt(sch.interest_amount, precision)
 
-            total_billed = flt(sch.interest_amount, precision) + flt(
-                sch.principal_amount, precision
-            )
-            total_paid = flt(paid_data["paid_int"], precision) + flt(
-                paid_data["paid_prin"], precision
-            )
+            # Consume from the remaining cumulative paid pool (oldest rows first)
+            paid_prin = min(sch_prin, remaining_prin)
+            remaining_prin = flt(remaining_prin - paid_prin, precision)
 
-            is_fully_paid = flt(total_paid, precision) >= flt(total_billed, precision)
+            paid_int = min(sch_int, remaining_int)
+            remaining_int = flt(remaining_int - paid_int, precision)
+
+            total_billed = flt(sch_prin + sch_int, precision)
+            total_paid = flt(paid_prin + paid_int, precision)
+            is_fully_paid = total_paid >= total_billed
+
+            print(total_paid)
+            print(total_billed)
 
             if sch_date < current_date and not is_fully_paid:
                 past_due_rows += 1
 
-                if not oldest_unpaid_date:
-                    oldest_unpaid_date = sch.payment_date
+                if not oldest_unpaid:
+                    oldest_unpaid = sch.payment_date
 
-                if flt(total_paid, precision) > 0:
-                    has_partial_payment = True
+                if total_paid > 0:
+                    has_partial = True
 
-        if oldest_unpaid_date:
-            days_late = date_diff(current_date, oldest_unpaid_date)
-            overdue_days = days_late
+        new_status = "Regular"
+        overdue_days = 0
+        print(oldest_unpaid)
+
+        if oldest_unpaid:
+            overdue_days = date_diff(current_date, oldest_unpaid)
 
             if current_date > getdate(maturity_date):
                 new_status = "Past Maturity"
-
-            elif has_partial_payment or past_due_rows > 1:
+            elif has_partial or past_due_rows > 1:
                 new_status = "Arrears"
-
-            elif days_late >= 30:
+            elif overdue_days >= 30:
                 new_status = "Missed Repayment"
-
-            elif days_late > 0 and days_late < 30:
+            elif 0 < overdue_days < 30:
                 new_status = "Overdue"
         else:
-            new_status = "Regular"
-            overdue_days = 0
+            # No past-due rows — check if any unpaid row is due exactly today
+            # Walk again using a fresh copy of the remaining pool
+            remaining_prin_chk = flt(
+                loan_totals.get("total_principal_paid") or 0, precision
+            )
+            remaining_int_chk = flt(
+                loan_totals.get("total_interest_paid") or 0, precision
+            )
+            for sch in schedule:
+                sch_date = getdate(sch.payment_date)
+                sch_prin = flt(sch.principal_amount, precision)
+                sch_int = flt(sch.interest_amount, precision)
+                paid_prin = min(sch_prin, remaining_prin_chk)
+                remaining_prin_chk = flt(remaining_prin_chk - paid_prin, precision)
+                paid_int = min(sch_int, remaining_int_chk)
+                remaining_int_chk = flt(remaining_int_chk - paid_int, precision)
+                billed = flt(sch_prin + sch_int, precision)
+                paid = flt(paid_prin + paid_int, precision)
 
+                if sch_date == current_date and paid < billed:
+                    new_status = "Due Today"
+                    break
+
+        # ── 6. Persist only if changed ─────────────────────────────────────────
         if (
             self.repayment_status != new_status
-            or flt(self.get("overdue_days")) != overdue_days
+            or flt(self.get("overdue_days") or 0) != overdue_days
         ):
             self.db_set("repayment_status", new_status)
             self.db_set("overdue_days", overdue_days)
@@ -292,10 +313,15 @@ class Loan(AccountsController):
         if not self.posting_date:
             self.posting_date = nowdate()
 
-        if self.loan_product and not self.rate_of_interest:
-            self.rate_of_interest = frappe.db.get_value(
-                "Loan Product", self.loan_product, "rate_of_interest"
-            )
+        if self.loan_product:
+            if not self.rate_of_interest:
+                self.rate_of_interest = frappe.db.get_value(
+                    "Loan Product", self.loan_product, "rate_of_interest"
+                )
+            if not self.loan_amount:
+                self.loan_amount = frappe.db.get_value(
+                    "Loan Product", self.loan_product, "maximum_loan_amount"
+                )
 
     def check_sanctioned_amount_limit(self):
         sanctioned_amount_limit = get_sanctioned_amount_limit(
@@ -548,6 +574,7 @@ def request_loan_closure(loan, posting_date=None, auto_close_loan=0):
         # Auto create loan write off and update status as loan closure requested
         write_off = make_loan_write_off(loan)
         write_off.submit()
+
     elif pending_amount > 0:
         frappe.throw(
             _("Cannot close loan as there is an outstanding of {0}").format(
@@ -574,12 +601,12 @@ def close_unsecured_term_loan(loan):
 
     if (
         loan_details.status == "Loan Closure Requested"
-        and loan_details.is_term_loan
-        and not loan_details.is_secured_loan
+        # and loan_details.is_term_loan
+        # and not loan_details.is_secured_loan
     ):
         frappe.db.set_value("Loan", loan, "status", "Closed")
-    else:
-        frappe.throw(_("Cannot close this loan until full repayment"))
+    # else:
+    #     frappe.throw(_("Cannot close this loan until full repayment"))
 
 
 @frappe.whitelist()
@@ -647,8 +674,33 @@ def make_repayment_entry(
 
 @frappe.whitelist()
 def make_loan_write_off(loan, company=None, posting_date=None, amount=0, as_dict=0):
+    """
+    Create a Loan Write Off document for the given loan.
+
+    Parameters
+    ----------
+    loan         : str   Loan name
+    company      : str   Company (fetched from Loan if not provided)
+    posting_date : date  Write-off date (today if not provided)
+    amount       : float Amount to write off.
+                         0 or omitted → write off the full total outstanding
+                         (principal + interest + penalty).
+    as_dict      : bool  Return as dict instead of document object.
+
+    Changes from original
+    ---------------------
+    OLD: validated amount against pending_principal_amount from calculate_amounts().
+         This only covered principal and missed outstanding interest + penalty.
+         Default amount also excluded interest and penalty → partial write-off.
+
+    NEW: validates against total_outstanding = pending_principal
+                                               + outstanding_interest
+                                               + outstanding_penalty.
+         Default amount (amount=0) writes off the full total outstanding.
+         company is now explicitly set on the doc so cost_center lookup works.
+    """
     from lending.loan_management.doctype.loan_repayment.loan_repayment import (
-        calculate_amounts,
+        get_pending_principal_amount,
     )
 
     if not company:
@@ -657,23 +709,99 @@ def make_loan_write_off(loan, company=None, posting_date=None, amount=0, as_dict
     if not posting_date:
         posting_date = getdate()
 
-    amounts = calculate_amounts(loan, posting_date)
-    pending_amount = amounts["pending_principal_amount"]
+    # ── Compute total outstanding across all three components ─────────────────
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
 
-    if amount and (amount > pending_amount):
-        frappe.throw(_("Write Off amount cannot be greater than pending loan amount"))
+    loan_details = frappe.get_value(
+        "Loan",
+        loan,
+        [
+            "total_payment",
+            "debit_adjustment_amount",
+            "credit_adjustment_amount",
+            "refund_amount",
+            "total_principal_paid",
+            "loan_amount",
+            "total_interest_payable",
+            "written_off_amount",
+            "disbursed_amount",
+            "status",
+        ],
+        as_dict=1,
+    )
 
+    pending_principal = flt(get_pending_principal_amount(loan_details), precision)
+
+    outstanding_interest = flt(
+        frappe.db.sql(
+            """SELECT COALESCE(
+                   SUM(interest_amount - COALESCE(paid_interest_amount, 0)), 0)
+               FROM `tabLoan Interest Accrual`
+               WHERE loan = %s AND docstatus = 1
+                 AND accrual_type != 'Penalty'
+                 AND interest_amount > COALESCE(paid_interest_amount, 0)""",
+            (loan,),
+        )[0][0],
+        precision,
+    )
+
+    outstanding_penalty = flt(
+        frappe.db.sql(
+            """SELECT COALESCE(
+                   SUM(penalty_amount - COALESCE(paid_interest_amount, 0)), 0)
+               FROM `tabLoan Interest Accrual`
+               WHERE loan = %s AND docstatus = 1
+                 AND accrual_type = 'Penalty'
+                 AND penalty_amount > COALESCE(paid_interest_amount, 0)""",
+            # NOTE: paid_penalty_amount does not exist on tabLoan Interest Accrual.
+            # For Penalty-type LIAs, interest_amount is always 0 so paid_interest_amount
+            # is free to use as a write-off tracking field for penalty amounts.
+            (loan,),
+        )[0][0],
+        precision,
+    )
+
+    total_outstanding = flt(
+        pending_principal + outstanding_interest + outstanding_penalty,
+        precision,
+    )
+
+    # ── Validate requested amount ─────────────────────────────────────────────
+    amount = flt(amount, precision)
+
+    if amount and amount > total_outstanding:
+        frappe.throw(
+            _(
+                "Write-off amount ({0}) cannot exceed total outstanding balance ({1}).<br>"
+                "Outstanding: Principal {2} | Interest {3} | Penalty {4}"
+            ).format(
+                amount,
+                total_outstanding,
+                pending_principal,
+                outstanding_interest,
+                outstanding_penalty,
+            )
+        )
+
+    # Default: write off everything outstanding
     if not amount:
-        amount = pending_amount
+        amount = total_outstanding
 
-    # get default write off account from company master
+    if amount <= 0:
+        frappe.throw(_("No outstanding balance to write off for loan {0}").format(loan))
+
+    # ── Get write-off expense account from Company master ─────────────────────
     write_off_account = frappe.get_value("Company", company, "write_off_account")
 
+    # ── Build the write-off document ──────────────────────────────────────────
     write_off = frappe.new_doc("Loan Write Off")
     write_off.loan = loan
+    write_off.company = company  # required for cost_center lookup
     write_off.posting_date = posting_date
     write_off.write_off_account = write_off_account
     write_off.write_off_amount = amount
+    # set_missing_values() in validate() will compute the three-way split:
+    #   write_off_penalty_amount, write_off_interest_amount, write_off_principal_amount
     write_off.save()
 
     if as_dict:

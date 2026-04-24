@@ -32,7 +32,6 @@ class LoanDisbursement(AccountsController):
 
     def make_interest_accrual(self):
         loan_doc = frappe.get_doc("Loan", self.against_loan)
-
         # FIX: Add status="Active" filter to skip superseded schedules
         schedule = frappe.get_doc(
             "Loan Repayment Schedule",
@@ -97,31 +96,24 @@ class LoanDisbursement(AccountsController):
         if loan_doc:
             self.loan_amount = flt(loan_doc.loan_amount)
 
-        # Build charges from Loan Product only if not already set
-        if not self.get("loan_disbursement_charges"):
-            loan_product = frappe.get_doc("Loan Product", self.loan_product)
-
-            for i in loan_product.loan_charges:
-                self.append(
-                    "loan_disbursement_charges",
-                    {
-                        "charge": i.charge_type,
-                        "account": i.income_account,
-                        "amount": flt(i.amount),
-                    },
-                )
-
-        self.total_charges = sum(
-            flt(c.amount) for c in self.get("loan_disbursement_charges")
-        )
-
-        # Disbursed amount = full loan amount
-        # Charges are deducted from the bank disbursement but the Loan Account
-        # receives the full principal. The GL handles the split:
-        #   DR Loan Account: loan_amount (full principal owed by borrower)
-        #   CR Bank: loan_amount - charges (net cash to borrower)
-        #   CR Charge Income: charges (fee income)
-        self.disbursed_amount = flt(self.loan_amount)
+        # if not self.get("loan_disbursement_charges"):
+        #     loan_product = frappe.get_doc("Loan Product", self.loan_product)
+        #     for i in loan_product.loan_charges:
+        #         self.append(
+        #             "loan_disbursement_charges",
+        #             {
+        #                 "charge": i.charge_type,
+        #                 "account": i.income_account,
+        #                 "amount": flt(i.amount),
+        #             },
+        #         )
+        self.total_charges = 0
+        if self.loan_disbursement_charges:
+            self.total_charges = sum(
+                flt(c.amount) for c in self.get("loan_disbursement_charges")
+            )
+        # if not self.disbursed_amount:
+        #     self.disbursed_amount = flt(self.loan_amount)
 
     def withheld_security_deposit(self):
         if self.withhold_security_deposit:
@@ -206,10 +198,10 @@ class LoanDisbursement(AccountsController):
         if disbursed_amount == 0:
             status = "Sanctioned"
 
-        elif disbursed_amount >= loan_details.loan_amount:
-            status = "Disbursed"
-        else:
-            status = "Partially Disbursed"
+        # elif disbursed_amount >= loan_details.loan_amount:
+        status = "Disbursed"
+        # else:
+        #     status = "Partially Disbursed"
 
         return disbursed_amount, status, total_payment
 
@@ -239,15 +231,17 @@ class LoanDisbursement(AccountsController):
             total_payment = total_payment + topup_amount
 
         # Single disbursement: disbursed_amount = loan_amount → Disbursed
-        if flt(disbursed_amount) >= flt(loan_details.loan_amount):
-            status = "Disbursed"
-        else:
-            status = "Partially Disbursed"
+        # if flt(disbursed_amount) >= flt(loan_details.loan_amount):
+        status = "Disbursed"
+        # else:
+        #     status = "Partially Disbursed"
 
         return disbursed_amount, status, total_payment
 
     def make_gl_entries(self, cancel=0, adv_adj=0):
         gle_map = []
+        if not self.disbursed_amount:
+            return
 
         total_charges = sum(
             flt(c.amount) for c in self.get("loan_disbursement_charges")
@@ -338,7 +332,7 @@ class LoanDisbursement(AccountsController):
             gle_map.append(
                 self.get_gl_dict(
                     {
-                        "account": charge.account,
+                        "account": charge.account or "5111 - Cost of Goods Sold - CFS",
                         "against": self.loan_account,
                         "credit": charge.amount,
                         "credit_in_account_currency": charge.amount,

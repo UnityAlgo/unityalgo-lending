@@ -84,7 +84,7 @@
   {
    "fieldname": "maximum_loan_amount",
    "fieldtype": "Currency",
-   "label": "Loan Amount",
+   "label": "Maximum Loan Amount",
    "non_negative": 1,
    "options": "Company:company:default_currency"
   },
@@ -327,10 +327,12 @@
    "unique": 1
   },
   {
+   "default": "Rate",
    "fieldname": "penalty_interest_method",
    "fieldtype": "Select",
    "label": "Penalty Interest Method",
-   "options": "Rate\nPTPD"
+   "options": "Rate\nPTPD",
+   "read_only": 1
   },
   {
    "depends_on": "eval:doc.penalty_interest_method == \"PTPD\"",
@@ -489,7 +491,6 @@
   {
    "fieldname": "minimum_loan_amount",
    "fieldtype": "Currency",
-   "hidden": 1,
    "label": "Minimum Loan Amount",
    "non_negative": 1,
    "options": "Company:company:default_currency"
@@ -551,7 +552,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-03-26 14:16:01.875298",
+ "modified": "2026-04-05 22:12:10.881935",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Product",

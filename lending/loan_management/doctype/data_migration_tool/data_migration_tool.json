@@ -18,6 +18,7 @@
   "section_config",
   "company",
   "branch",
+  "cost_center",
   "column_break_2",
   "sales_person",
   "mode_of_payment",
@@ -362,13 +363,20 @@
    "fieldtype": "Link",
    "label": "Charge Item",
    "options": "Item"
+  },
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "link_filters": "[[\"Cost Center\",\"is_group\",\"=\",0]]",
+   "options": "Cost Center"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-04-09 11:40:37.881137",
+ "modified": "2026-04-29 16:33:11.723390",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Data Migration Tool",

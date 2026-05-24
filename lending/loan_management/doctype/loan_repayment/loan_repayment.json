@@ -11,12 +11,14 @@
   "branch",
   "applicant_type",
   "applicant",
+  "customer_name",
   "loan_product",
   "repayment_type",
   "loan_restructure",
   "column_break_3",
   "company",
   "posting_date",
+  "sales_person",
   "clearance_date",
   "rate_of_interest",
   "days_past_due",
@@ -102,7 +104,6 @@
    "fetch_from": "against_loan.applicant",
    "fieldname": "applicant",
    "fieldtype": "Link",
-   "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Customer",
    "options": "Customer",
@@ -132,6 +133,7 @@
    "bold": 1,
    "fieldname": "amount_paid",
    "fieldtype": "Currency",
+   "in_list_view": 1,
    "label": "Amount Paid",
    "non_negative": 1,
    "options": "Company:company:default_currency",
@@ -211,7 +213,6 @@
    "default": "0.0",
    "fieldname": "principal_amount_paid",
    "fieldtype": "Currency",
-   "hidden": 1,
    "label": "Principal Amount Paid",
    "options": "Company:company:default_currency",
    "read_only": 1
@@ -241,7 +242,6 @@
   {
    "fieldname": "total_interest_paid",
    "fieldtype": "Currency",
-   "hidden": 1,
    "label": "Total Interest Paid",
    "options": "Company:company:default_currency",
    "read_only": 1
@@ -264,7 +264,6 @@
   {
    "fieldname": "total_penalty_paid",
    "fieldtype": "Currency",
-   "hidden": 1,
    "label": "Total Penalty Paid",
    "options": "Company:company:default_currency",
    "read_only": 1
@@ -390,12 +389,26 @@
    "in_standard_filter": 1,
    "label": "Branch",
    "options": "Branch"
+  },
+  {
+   "fetch_from": "applicant.customer_name",
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sales_person",
+   "fieldtype": "Link",
+   "label": "Loan Officer",
+   "options": "Sales Person"
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-04-23 18:44:52.192811",
+ "modified": "2026-05-13 16:25:11.857699",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Repayment",

@@ -17,6 +17,7 @@
   "company",
   "branch",
   "applicant",
+  "customer_name",
   "is_term_loan",
   "withhold_security_deposit",
   "section_break_7",
@@ -45,6 +46,7 @@
    "fieldname": "against_loan",
    "fieldtype": "Link",
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Against Loan ",
    "options": "Loan",
    "reqd": 1
@@ -86,10 +88,11 @@
   {
    "fetch_from": "against_loan.applicant",
    "fieldname": "applicant",
-   "fieldtype": "Dynamic Link",
+   "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "Applicant",
-   "options": "applicant_type",
+   "in_standard_filter": 1,
+   "label": "Customer",
+   "options": "Customer",
    "read_only": 1,
    "reqd": 1
   },
@@ -259,12 +262,20 @@
    "fieldtype": "Currency",
    "label": "Total Charges",
    "read_only": 1
+  },
+  {
+   "fetch_from": "applicant.customer_name",
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer Name",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-04-23 18:44:28.472867",
+ "modified": "2026-05-20 14:22:39.506367",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Disbursement",

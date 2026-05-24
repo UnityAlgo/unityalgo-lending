@@ -12,6 +12,7 @@ from erpnext.controllers.accounts_controller import AccountsController
 from lending.loan_management.doctype.loan.loan import (
     update_all_linked_loan_customer_npa_status,
 )
+
 from lending.loan_management.doctype.loan_interest_accrual.loan_interest_accrual import (
     get_last_accrual_date,
     get_per_day_interest,
@@ -1559,17 +1560,18 @@ class LoanRepayment(AccountsController):
         ):
             # For Loan Closure, amount_paid includes interest + penalty + principal,
             # so it legitimately exceeds pending_principal_amount. Only block non-closure types.
-            if self.repayment_type != "Loan Closure" and flt(
-                self.amount_paid, precision
-            ) > flt(self.pending_principal_amount, precision):
-                frappe.throw(
-                    _(
-                        "The amount paid ({0}) cannot be more than the pending principal amount ({1})."
-                    ).format(
-                        flt(self.amount_paid, precision),
-                        flt(self.pending_principal_amount, precision),
-                    )
-                )
+            
+            # if self.repayment_type != "Loan Closure" and flt(
+            #     self.amount_paid, precision
+            # ) > flt(self.pending_principal_amount, precision):
+            #     frappe.throw(
+            #         _(
+            #             "The amount paid ({0}) cannot be more than the pending principal amount ({1})."
+            #         ).format(
+            #             flt(self.amount_paid, precision),
+            #             flt(self.pending_principal_amount, precision),
+            #         )
+            #     )
 
             # For closure fallback, only book the principal portion to the loan account
             gl_principal = (

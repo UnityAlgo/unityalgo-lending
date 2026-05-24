@@ -45,6 +45,12 @@ frappe.ui.form.on("Data Migration Tool", {
                     () => frm.trigger("run_fix_accrual_gl"),
                     __("Post-Migration Tools")
                 );
+
+                frm.add_custom_button(
+                    __("Match Repayments (Excel vs ERP)"),
+                    () => frm.trigger("run_match_repayments"),
+                    __("Post-Migration Tools")
+                );
             }
         }
 
@@ -469,6 +475,53 @@ frappe.ui.form.on("Data Migration Tool", {
         });
     },
 
+    // ── Match Repayments (Excel vs ERP) ──────────────────────────────
+    run_match_repayments(frm) {
+        const d = new frappe.ui.Dialog({
+            title: __("Match Repayments — Excel vs ERP"),
+            size:  "extra-large",
+        });
+
+        d.$body.html(`
+            <div class="p-3">
+                <div class="alert alert-info">
+                    <b>What this does:</b><br>
+                    Compares every row in the repayment Excel file against submitted
+                    <b>Loan Repayment</b> records in ERPNext.<br><br>
+                    &nbsp;• Matching key: <code>Loan# + Collection Date + Amount</code> (±1.00 tolerance)<br>
+                    &nbsp;• <b>Unmatched</b> — Excel rows with no ERP counterpart, with exact diagnosis<br>
+                    &nbsp;• <b>Orphan ERP</b> — ERP repayments with no Excel counterpart<br>
+                    &nbsp;• Downloads a 3-sheet Excel report (Summary / Unmatched / Orphans)
+                </div>
+                <div id="match-rep-result" class="text-center mt-3">
+                    <i class="fa fa-spinner fa-spin fa-2x"></i>
+                    <p class="text-muted mt-2">Running reconciliation — this may take 10–30 seconds...</p>
+                </div>
+            </div>
+        `);
+        d.show();
+
+        frappe.call({
+            method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.match_repayments_excel",
+            args:   { doc_name: frm.doc.name, tolerance: 1.0 },
+            timeout: 120,
+            callback(r) {
+                if (r.exc || !r.message) {
+                    d.$body.find("#match-rep-result").html(
+                        `<div class="alert alert-danger">
+                            <b>Reconciliation failed.</b><br>
+                            <pre style="font-size:11px">${r.exc || "No response from server"}</pre>
+                        </div>`
+                    );
+                    return;
+                }
+                d.$body.find("#match-rep-result").html(
+                    render_match_repayments_html(r.message)
+                );
+            }
+        });
+    },
+
     // ── Account filters ───────────────────────────────────────────────
     company(frm) {
         frm.trigger("set_account_filters");
@@ -875,4 +928,202 @@ function render_validation_html(report) {
 
     h += `</div>`;
     return h;
+}
+
+
+// ── Repayment match result renderer ──────────────────────────────────────────
+
+function render_match_repayments_html(res) {
+    const fmt = n  => Number(n  || 0).toLocaleString();
+    const cur = n  => "₨ " + Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const s   = res.summary   || {};
+    const unm = res.unmatched || [];
+    const orp = res.orphans   || [];
+
+    const matchRate = s.excel_total
+        ? ((s.matched / s.excel_total) * 100).toFixed(1)
+        : "0.0";
+
+    const summaryClass = s.unmatched_count === 0 ? "alert-success" : "alert-warning";
+    const summaryIcon  = s.unmatched_count === 0 ? "fa-check-circle" : "fa-exclamation-triangle";
+
+    // ── Download button ───────────────────────────────────────────────────────
+    const downloadBtn = res.file_url
+        ? `<a href="${res.file_url}" target="_blank" download
+               class="btn btn-sm btn-primary mt-2" style="margin-left:8px">
+               <i class="fa fa-download"></i> Download Excel Report
+           </a>`
+        : `<span class="text-muted" style="font-size:11px">
+               (Excel export failed — check Error Log)
+           </span>`;
+
+    // ── Reason breakdown badges ───────────────────────────────────────────────
+    const reasonColors = {
+        "Loan ref not found in ERP at all":                  "danger",
+        "Date and amount both unmatched":                    "danger",
+        "Amount matched but date not found in ERP":          "warning",
+        "Date matched but amount mismatch":                  "warning",
+        "Date+amount combination already consumed by another row": "info",
+    };
+
+    let reasonBadges = "";
+    Object.entries(s.unmatched_by_reason || {})
+        .sort((a, b) => b[1] - a[1])
+        .forEach(([reason, count]) => {
+            const color = reasonColors[reason] || "secondary";
+            reasonBadges += `
+                <div class="mb-1">
+                    <span class="badge badge-${color}" style="font-size:11px;padding:4px 8px">
+                        ${fmt(count)}
+                    </span>
+                    <span style="font-size:12px;margin-left:6px">${reason}</span>
+                </div>`;
+        });
+
+    // ── Unmatched totals row ──────────────────────────────────────────────────
+    const ut = s.unmatched_totals || {};
+    const ot = s.orphan_totals   || {};
+
+    // ── Unmatched table (first 100 rows) ─────────────────────────────────────
+    let unmTable = "";
+    if (unm.length > 0) {
+        const reasonIcon = {
+            "Loan ref not found in ERP at all":                  "🔴",
+            "Date and amount both unmatched":                    "🔴",
+            "Amount matched but date not found in ERP":          "🟡",
+            "Date matched but amount mismatch":                  "🟡",
+            "Date+amount combination already consumed by another row": "🔵",
+        };
+
+        unmTable = `
+        <h6 class="mt-3">Unmatched Excel Rows
+            <small class="text-muted">(showing ${Math.min(unm.length, 100)} of ${fmt(s.unmatched_count)})</small>
+            ${downloadBtn}
+        </h6>
+        <div style="max-height:320px;overflow-y:auto">
+        <table class="table table-sm table-bordered" style="font-size:11px">
+            <thead style="position:sticky;top:0;background:#fff">
+                <tr>
+                    <th>Loan Ref</th>
+                    <th>ERP Loan</th>
+                    <th>Date</th>
+                    <th style="text-align:right">Amount</th>
+                    <th style="text-align:right">Principal</th>
+                    <th style="text-align:right">Interest</th>
+                    <th style="text-align:right">Penalty</th>
+                    <th>Reason</th>
+                    <th>Detail</th>
+                </tr>
+            </thead>
+            <tbody>`;
+
+        unm.slice(0, 100).forEach(r => {
+            const icon   = reasonIcon[r.reason] || "⚪";
+            const lnLink = r.erp_loan_name
+                ? `<a href="/app/loan/${r.erp_loan_name}" target="_blank">${r.erp_loan_name}</a>`
+                : `<span class="text-danger">—</span>`;
+            unmTable += `<tr>
+                <td><code style="font-size:10px">${r.loan_ref}</code></td>
+                <td>${lnLink}</td>
+                <td>${r.collection_date}</td>
+                <td style="text-align:right">${Number(r.amount||0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.principal_paid||0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.interest_paid||0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.penalty_paid||0).toLocaleString()}</td>
+                <td style="white-space:nowrap">${icon} ${r.reason}</td>
+                <td style="color:#666;font-size:10px">${r.detail || ""}</td>
+            </tr>`;
+        });
+        unmTable += `</tbody></table></div>`;
+    }
+
+    // ── Orphan table (first 50 rows) ──────────────────────────────────────────
+    let orpTable = "";
+    if (orp.length > 0) {
+        orpTable = `
+        <h6 class="mt-3">Orphan ERP Repayments
+            <small class="text-muted">(in ERP but not in Excel — showing ${Math.min(orp.length, 50)} of ${fmt(s.orphan_count)})</small>
+        </h6>
+        <div style="max-height:220px;overflow-y:auto">
+        <table class="table table-sm table-bordered" style="font-size:11px">
+            <thead style="position:sticky;top:0;background:#fff">
+                <tr>
+                    <th>Loan Ref</th>
+                    <th>ERP Loan</th>
+                    <th>Posting Date</th>
+                    <th style="text-align:right">Amount</th>
+                    <th style="text-align:right">Principal</th>
+                    <th style="text-align:right">Interest</th>
+                    <th style="text-align:right">Penalty</th>
+                </tr>
+            </thead>
+            <tbody>`;
+        orp.slice(0, 50).forEach(r => {
+            orpTable += `<tr>
+                <td><code style="font-size:10px">${r.loan_ref}</code></td>
+                <td><a href="/app/loan/${r.erp_loan_name}" target="_blank">${r.erp_loan_name}</a></td>
+                <td>${r.posting_date}</td>
+                <td style="text-align:right">${Number(r.amount_paid||0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.principal_amount_paid||0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.total_interest_paid||0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.total_penalty_paid||0).toLocaleString()}</td>
+            </tr>`;
+        });
+        orpTable += `</tbody></table></div>`;
+    }
+
+    return `
+    <div style="font-size:13px;line-height:1.8;padding:4px">
+
+        <!-- Summary banner -->
+        <div class="alert ${summaryClass}">
+            <i class="fa ${summaryIcon}"></i>
+            &nbsp;Match rate: <b>${matchRate}%</b>
+            &nbsp;·&nbsp; Excel rows: <b>${fmt(s.excel_total)}</b>
+            &nbsp;·&nbsp; Matched: <b>${fmt(s.matched)}</b>
+            &nbsp;·&nbsp; Unmatched: <b>${fmt(s.unmatched_count)}</b>
+            &nbsp;·&nbsp; Orphan ERP: <b>${fmt(s.orphan_count)}</b>
+            ${s.unmatched_count === 0 ? downloadBtn : ""}
+        </div>
+
+        <!-- Reason breakdown -->
+        ${reasonBadges ? `<div class="mb-3"><b>Unmatched by reason:</b><div class="mt-1">${reasonBadges}</div></div>` : ""}
+
+        <!-- Unmatched financial totals -->
+        ${s.unmatched_count > 0 ? `
+        <table class="table table-sm table-bordered mb-3" style="font-size:12px">
+            <thead><tr>
+                <th></th>
+                <th style="text-align:right">Amount</th>
+                <th style="text-align:right">Principal</th>
+                <th style="text-align:right">Interest</th>
+                <th style="text-align:right">Penalty</th>
+            </tr></thead>
+            <tbody>
+            <tr class="warning">
+                <td><b>Unmatched (Excel→ERP)</b></td>
+                <td style="text-align:right"><b>${cur(ut.amount)}</b></td>
+                <td style="text-align:right">${cur(ut.principal)}</td>
+                <td style="text-align:right">${cur(ut.interest)}</td>
+                <td style="text-align:right">${cur(ut.penalty)}</td>
+            </tr>
+            <tr>
+                <td>Orphan ERP repayments</td>
+                <td style="text-align:right"><b>${cur(ot.amount)}</b></td>
+                <td style="text-align:right">${cur(ot.principal)}</td>
+                <td style="text-align:right">${cur(ot.interest)}</td>
+                <td style="text-align:right">${cur(ot.penalty)}</td>
+            </tr>
+            </tbody>
+        </table>` : ""}
+
+        ${unmTable}
+        ${orpTable}
+
+        <!-- Download at bottom if unmatched rows exist -->
+        ${s.unmatched_count > 0 || s.orphan_count > 0 ? `
+        <div class="mt-3 text-center">${downloadBtn}</div>` : ""}
+
+    </div>`;
 }

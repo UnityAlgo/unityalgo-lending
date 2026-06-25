@@ -6,7 +6,17 @@ frappe.ui.form.on("Data Migration Tool", {
     refresh(frm) {
         frm._poll_timer && clearInterval(frm._poll_timer);
 
-        // ── Buttons ───────────────────────────────────────────────────
+        if (frm.doc.errors_count > 0) {
+            frm.add_custom_button(__("Retry Failed Loans"), () => {
+                frappe.call({
+                    method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.retry_failed_records_creation",
+                    args: { name: frm.doc.name },
+                    callback(r) {
+                    }
+                });
+            })
+        }
+
         if (frm.doc.docstatus === 0) {
             frm.add_custom_button(__("Validate Before Submit"), () => {
                 frm.trigger("run_validation");
@@ -26,7 +36,6 @@ frappe.ui.form.on("Data Migration Tool", {
                 }).addClass("btn-danger");
             }
 
-            // ── Post-migration tools (only after migration completed) ──
             if (frm.doc.status === "Completed") {
                 frm.add_custom_button(
                     __("Reconcile Paid Amounts"),
@@ -86,18 +95,18 @@ frappe.ui.form.on("Data Migration Tool", {
         const s = frm.doc.status;
 
         const banners = {
-            "Draft":     null,
-            "Queued":    ["blue",   "fa-clock-o",        "Migration is queued — waiting for background worker..."],
-            "Running":   ["orange", "fa-spinner fa-spin", "Migration is running in the background..."],
-            "Completed": ["green",  "fa-check-circle",
+            "Draft": null,
+            "Queued": ["blue", "fa-clock-o", "Migration is queued — waiting for background worker..."],
+            "Running": ["orange", "fa-spinner fa-spin", "Migration is running in the background..."],
+            "Completed": ["green", "fa-check-circle",
                 `Migration complete &nbsp;·&nbsp;
-                 Customers: <b>${frm.doc.customers_created||0}</b> &nbsp;·&nbsp;
-                 Active Loans: <b>${frm.doc.loans_created||0}</b> &nbsp;·&nbsp;
-                 Historical: <b>${frm.doc.historical_loans_created||0}</b> &nbsp;·&nbsp;
-                 Repayments: <b>${frm.doc.repayments_created||0}</b> &nbsp;·&nbsp;
-                 Errors: <b>${frm.doc.errors_count||0}</b>`
+                 Customers: <b>${frm.doc.customers_created || 0}</b> &nbsp;·&nbsp;
+                 Active Loans: <b>${frm.doc.loans_created || 0}</b> &nbsp;·&nbsp;
+                 Historical: <b>${frm.doc.historical_loans_created || 0}</b> &nbsp;·&nbsp;
+                 Repayments: <b>${frm.doc.repayments_created || 0}</b> &nbsp;·&nbsp;
+                 Errors: <b>${frm.doc.errors_count || 0}</b>`
             ],
-            "Failed":    ["red",    "fa-times-circle",   "Migration failed — check the log and Error Log for details."],
+            "Failed": ["red", "fa-times-circle", "Migration failed — check the log and Error Log for details."],
         };
 
         const b = banners[s];
@@ -112,19 +121,20 @@ frappe.ui.form.on("Data Migration Tool", {
 
     // ── Live poll ─────────────────────────────────────────────────────
     poll_status(frm) {
+
         frappe.call({
             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.get_status",
             args: { doc_name: frm.doc.name },
             callback(r) {
                 if (!r.message) return;
                 const s = r.message;
-                frm.set_value("status",                   s.status);
-                frm.set_value("customers_created",        s.customers_created);
-                frm.set_value("loans_created",            s.loans_created);
+                frm.set_value("status", s.status);
+                frm.set_value("customers_created", s.customers_created);
+                frm.set_value("loans_created", s.loans_created);
                 frm.set_value("historical_loans_created", s.historical_loans_created);
-                frm.set_value("repayments_created",       s.repayments_created);
-                frm.set_value("errors_count",             s.errors_count);
-                frm.set_value("migration_log",            s.log);
+                frm.set_value("repayments_created", s.repayments_created);
+                frm.set_value("errors_count", s.errors_count);
+                frm.set_value("migration_log", s.log);
                 frm.trigger("render_status_banner");
 
                 if (s.status !== "Running" && s.status !== "Queued") {
@@ -135,20 +145,19 @@ frappe.ui.form.on("Data Migration Tool", {
         });
     },
 
-    // ── Validation dialog ─────────────────────────────────────────────
     run_validation(frm) {
         if (!frm.doc.customer_file || !frm.doc.disbursement_file || !frm.doc.repayment_file) {
             frappe.msgprint(__("Please attach all three Excel files before validating."));
             return;
         }
-        if (!frm.doc.company || !frm.doc.branch || !frm.doc.sales_person) {
-            frappe.msgprint(__("Please fill Company, Branch and Sales Person before validating."));
+        if (!frm.doc.company || !frm.doc.branch) {
+            frappe.msgprint(__("Please fill Company and Branch before validating."));
             return;
         }
 
         const d = new frappe.ui.Dialog({
             title: __("Pre-Migration Validation Report"),
-            size:  "extra-large",
+            size: "extra-large",
         });
         d.fields_dict = {};
         d.$body.html(
@@ -161,7 +170,7 @@ frappe.ui.form.on("Data Migration Tool", {
 
         frappe.call({
             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.validate_migration",
-            args:   { doc_name: frm.doc.name },
+            args: { doc_name: frm.doc.name },
             callback(r) {
                 if (r.exc) {
                     d.$body.find("#val-report").html(
@@ -173,7 +182,7 @@ frappe.ui.form.on("Data Migration Tool", {
             },
         });
 
-        frm.save("Save").then(() => {});
+        frm.save("Save").then(() => { });
     },
 
     // ── Reconcile Paid Amounts ─────────────────────────────────────────
@@ -181,7 +190,7 @@ frappe.ui.form.on("Data Migration Tool", {
         // Step 1: dry run dialog
         const d = new frappe.ui.Dialog({
             title: __("Reconcile Loan Paid Amounts"),
-            size:  "large",
+            size: "large",
         });
         d.$body.html(`
             <div class="p-3">
@@ -206,10 +215,9 @@ frappe.ui.form.on("Data Migration Tool", {
         `);
         d.show();
 
-        // Run dry run immediately when dialog opens
         frappe.call({
             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.reconcile_loan_paid_amounts",
-            args:   { dry_run: 1 },
+            args: { dry_run: 1 },
             callback(r) {
                 if (r.exc || !r.message) {
                     d.$body.find("#reconcile-result").html(
@@ -235,7 +243,7 @@ frappe.ui.form.on("Data Migration Tool", {
 
                         frappe.call({
                             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.reconcile_loan_paid_amounts",
-                            args:   { dry_run: 0 },
+                            args: { dry_run: 0 },
                             callback(r2) {
                                 if (r2.exc || !r2.message) {
                                     d.$body.find("#reconcile-result").html(
@@ -269,7 +277,7 @@ frappe.ui.form.on("Data Migration Tool", {
     run_fix_statuses(frm) {
         const d = new frappe.ui.Dialog({
             title: __("Fix Repayment Statuses"),
-            size:  "large",
+            size: "large",
         });
         d.$body.html(`
             <div class="p-3">
@@ -296,7 +304,7 @@ frappe.ui.form.on("Data Migration Tool", {
         // Run dry run immediately
         frappe.call({
             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.fix_repayment_statuses",
-            args:   { dry_run: 1 },
+            args: { dry_run: 1 },
             callback(r) {
                 if (r.exc || !r.message) {
                     d.$body.find("#status-result").html(
@@ -321,7 +329,7 @@ frappe.ui.form.on("Data Migration Tool", {
 
                         frappe.call({
                             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.fix_repayment_statuses",
-                            args:   { dry_run: 0 },
+                            args: { dry_run: 0 },
                             callback(r2) {
                                 if (r2.exc || !r2.message) {
                                     d.$body.find("#status-result").html(
@@ -355,7 +363,7 @@ frappe.ui.form.on("Data Migration Tool", {
     run_fix_accrual_gl(frm) {
         const d = new frappe.ui.Dialog({
             title: __("Fix Interest / Penalty GL Entries"),
-            size:  "large",
+            size: "large",
         });
         d.$body.html(`
             <div class="p-3">
@@ -379,7 +387,7 @@ frappe.ui.form.on("Data Migration Tool", {
 
         frappe.call({
             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.create_missing_accrual_gl_entries",
-            args:   { dry_run: 1 },
+            args: { dry_run: 1 },
             callback(r) {
                 if (r.exc || !r.message) {
                     d.$body.find("#gl-fix-result").html(
@@ -389,7 +397,7 @@ frappe.ui.form.on("Data Migration Tool", {
                 }
                 const res = r.message;
                 const fmt = n => Number(n || 0).toLocaleString();
-                const cur = n => "\u20a8 " + Number(n || 0).toLocaleString("en-PK", {maximumFractionDigits: 0});
+                const cur = n => "\u20a8 " + Number(n || 0).toLocaleString("en-PK", { maximumFractionDigits: 0 });
 
                 let html = `
                 <div class="alert alert-warning mb-3">
@@ -410,7 +418,7 @@ frappe.ui.form.on("Data Migration Tool", {
                     <table class="table table-sm table-bordered" style="font-size:11px">
                         <thead><tr><th>LIA</th><th>Loan</th><th>Date</th><th>Type</th><th>Amount</th><th>DR</th><th>CR</th></tr></thead>
                         <tbody>`;
-                    res.details.slice(0, 10).forEach(function(d2) {
+                    res.details.slice(0, 10).forEach(function (d2) {
                         html += `<tr>
                             <td>${d2.lia}</td>
                             <td><a href="/app/loan/${d2.loan}" target="_blank">${d2.loan}</a></td>
@@ -434,7 +442,7 @@ frappe.ui.form.on("Data Migration Tool", {
                 d.$body.find("#gl-fix-result").html(html);
 
                 if (res.created > 0) {
-                    d.set_primary_action(__("Apply Correction"), function() {
+                    d.set_primary_action(__("Apply Correction"), function () {
                         d.$body.find("#gl-fix-result").html(
                             '<div class="text-center p-3"><i class="fa fa-spinner fa-spin fa-2x"></i>' +
                             '<p class="text-muted mt-2">Creating GL entries for ' + fmt(res.created) + ' accruals...</p></div>'
@@ -443,7 +451,7 @@ frappe.ui.form.on("Data Migration Tool", {
 
                         frappe.call({
                             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.create_missing_accrual_gl_entries",
-                            args:   { dry_run: 0 },
+                            args: { dry_run: 0 },
                             callback(r2) {
                                 if (r2.exc || !r2.message) {
                                     d.$body.find("#gl-fix-result").html(
@@ -479,7 +487,7 @@ frappe.ui.form.on("Data Migration Tool", {
     run_match_repayments(frm) {
         const d = new frappe.ui.Dialog({
             title: __("Match Repayments — Excel vs ERP"),
-            size:  "extra-large",
+            size: "extra-large",
         });
 
         d.$body.html(`
@@ -503,7 +511,7 @@ frappe.ui.form.on("Data Migration Tool", {
 
         frappe.call({
             method: "lending.loan_management.doctype.data_migration_tool.data_migration_tool.match_repayments_excel",
-            args:   { doc_name: frm.doc.name, tolerance: 1.0 },
+            args: { doc_name: frm.doc.name, tolerance: 1.0 },
             timeout: 120,
             callback(r) {
                 if (r.exc || !r.message) {
@@ -532,7 +540,7 @@ frappe.ui.form.on("Data Migration Tool", {
         [
             "disbursement_account", "payment_account", "loan_account",
             "interest_income_account", "interest_receivable_account",
-            "penalty_income_account",  "penalty_receivable_account",
+            "penalty_income_account", "penalty_receivable_account",
         ].forEach(f => {
             frm.set_query(f, () => ({
                 filters: { company: frm.doc.company, is_group: 0 }
@@ -570,7 +578,7 @@ function render_reconcile_result(res, is_dry_run) {
     const fmt = n => Number(n || 0).toLocaleString();
     const tag = is_dry_run ? "DRY RUN — no changes written" : "Applied";
     const cls = is_dry_run ? "alert-warning" : "alert-success";
-    const ico = is_dry_run ? "fa-eye"        : "fa-check-circle";
+    const ico = is_dry_run ? "fa-eye" : "fa-check-circle";
 
     let h = `
     <div class="alert ${cls} mb-3">
@@ -625,16 +633,16 @@ function render_status_result(res, is_dry_run) {
     const fmt = n => Number(n || 0).toLocaleString();
     const tag = is_dry_run ? "DRY RUN — no changes written" : "Applied";
     const cls = is_dry_run ? "alert-warning" : "alert-success";
-    const ico = is_dry_run ? "fa-eye"        : "fa-check-circle";
+    const ico = is_dry_run ? "fa-eye" : "fa-check-circle";
 
     const statusColor = {
-        "Fully Paid"      : "success",
-        "Regular"         : "primary",
-        "Due Today"       : "warning",
-        "Overdue"         : "warning",
-        "Arrears"         : "danger",
+        "Fully Paid": "success",
+        "Regular": "primary",
+        "Due Today": "warning",
+        "Overdue": "warning",
+        "Arrears": "danger",
         "Missed Repayment": "danger",
-        "Past Maturity"   : "danger",
+        "Past Maturity": "danger",
     };
 
     let h = `
@@ -648,7 +656,7 @@ function render_status_result(res, is_dry_run) {
 
     // Before / After status counts side by side
     const before = res.before_counts || {};
-    const after  = res.after_counts  || {};
+    const after = res.after_counts || {};
     const allStatuses = [...new Set([...Object.keys(before), ...Object.keys(after)])];
 
     if (allStatuses.length > 0) {
@@ -664,14 +672,14 @@ function render_status_result(res, is_dry_run) {
             <tbody>`;
 
         allStatuses.sort((a, b) => (after[b] || 0) - (after[a] || 0)).forEach(s => {
-            const b  = before[s] || 0;
-            const a  = after[s]  || 0;
-            const d  = a - b;
+            const b = before[s] || 0;
+            const a = after[s] || 0;
+            const d = a - b;
             const color = statusColor[s] || "secondary";
             const badge = `<span class="badge badge-${color}">${s || "(blank)"}</span>`;
-            const diff  = d === 0 ? `<span class="text-muted">—</span>`
-                        : d > 0  ? `<span class="text-success">+${fmt(d)}</span>`
-                                  : `<span class="text-danger">${fmt(d)}</span>`;
+            const diff = d === 0 ? `<span class="text-muted">—</span>`
+                : d > 0 ? `<span class="text-success">+${fmt(d)}</span>`
+                    : `<span class="text-danger">${fmt(d)}</span>`;
             h += `<tr>
                 <td>${badge}</td>
                 <td>${fmt(b)}</td>
@@ -690,7 +698,7 @@ function render_status_result(res, is_dry_run) {
             <tbody>`;
         res.sample_changes.slice(0, 15).forEach(d => {
             const bc = statusColor[d.before] || "secondary";
-            const ac = statusColor[d.after]  || "secondary";
+            const ac = statusColor[d.after] || "secondary";
             h += `<tr>
                 <td><a href="/app/loan/${d.loan}" target="_blank">${d.loan}</a></td>
                 <td><small>${d.loan_status || ""}</small></td>
@@ -710,243 +718,38 @@ function render_status_result(res, is_dry_run) {
     return h;
 }
 
-
-// ── Validation HTML renderer ──────────────────────────────────────────────────
-
 function render_validation_html(report) {
-    const ok   = `<span style="color:green">✅</span>`;
-    const warn = `<span style="color:orange">⚠️</span>`;
-    const err  = `<span style="color:red">❌</span>`;
-
-    const fmt  = n  => Number(n || 0).toLocaleString();
-    const cur  = n  => "₨ " + Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-    const pct  = (a, b) => b ? ((a / b) * 100).toFixed(1) + "%" : "—";
-    const diff_badge = (d) => {
-        if (!d && d !== 0) return "";
-        const n = Number(d);
-        return n === 0
-            ? `<span class="badge badge-success">Match</span>`
-            : `<span class="badge badge-warning">${cur(n)} gap</span>`;
-    };
-
-    const row  = (label, val, cls = "") =>
-        `<tr${cls ? ` class="${cls}"` : ""}><td>${label}</td><td><b>${val}</b></td></tr>`;
+    const ok  = `<span style="color:green">✅</span>`;
+    const err = `<span style="color:red">❌</span>`;
 
     let h = `<div style="font-size:13px;line-height:1.9;padding:8px">`;
 
-    // ── 1. Configuration ──────────────────────────────────────────────────────
-    h += `<h5>Configuration</h5>`;
-    if (report.config_ok) {
-        h += `<p>${ok} All configuration checks passed.</p>`;
+    if (!report.ok) {
+        h += `<div class="alert alert-danger"><b>${err} Fix these errors before migrating:</b><ul>`;
+        (report.errors || []).forEach(e => h += `<li>${e}</li>`);
+        h += `</ul></div>`;
     } else {
-        (report.config_errors || []).forEach(e => h += `<p>${err} ${e}</p>`);
-        h += `<div class="alert alert-danger">Fix the above errors before submitting.</div></div>`;
-        return h;
+        h += `<p>${ok} <b>All required columns present. Ready to migrate.</b></p>`;
     }
-
-    if ((report.warnings || []).length) {
-        report.warnings.forEach(w => h += `<p>${warn} ${w}</p>`);
-    }
-
-    // ── 2. File Row Counts ────────────────────────────────────────────────────
-    const rc = report.row_counts || {};
-    h += `<h5 class="mt-3">File Row Counts</h5>
-    <table class="table table-sm table-bordered">
-        ${row("Customers",     fmt(rc.customers))}
-        ${row("Disbursements", fmt(rc.disbursements))}
-        ${row("Repayments",    fmt(rc.repayments))}
-    </table>`;
-
-    // ── 3. Customers ──────────────────────────────────────────────────────────
-    const c = report.customers || {};
-    h += `<h5 class="mt-3">Customers</h5>
-    <table class="table table-sm table-bordered">
-        ${row("Will Create",          fmt(c.will_create),  "success")}
-        ${row("Already Exist (skip)", fmt(c.already_exist))}
-        ${row("Invalid / Skipped",    c.invalid || 0)}
-    </table>`;
-    h += Object.keys(c.marital_unmapped || {}).length
-        ? `<p>${warn} Unmapped marital status (left blank): <code>${JSON.stringify(c.marital_unmapped)}</code></p>`
-        : `<p>${ok} All marital status values map correctly.</p>`;
-    h += Object.keys(c.religion_unmapped || {}).length
-        ? `<p>${warn} Unmapped religion (left blank): <code>${JSON.stringify(c.religion_unmapped)}</code></p>`
-        : `<p>${ok} All religion values map correctly.</p>`;
-
-    // ── 4. Loan Products ──────────────────────────────────────────────────────
-    const lp = report.loan_products || {};
-    h += `<h5 class="mt-3">Loan Products</h5>
-    <table class="table table-sm table-bordered">
-        ${row("In Excel",           lp.in_excel || 0)}
-        ${row("Already in Frappe",  lp.existing  || 0)}
-        ${row("Need Account Patch", (lp.need_patch  || []).join(", ") || "None")}
-        ${row("Will Create",        (lp.will_create || []).join(", ") || "None")}
-    </table>`;
-
-    // ── 5. Active Loans ───────────────────────────────────────────────────────
-    const l = report.loans || {};
-    h += `<h5 class="mt-3">Active Loans</h5>
-    <table class="table table-sm table-bordered">
-        ${row("Will Create",          fmt(l.will_create),  "success")}
-        ${row("Already Exist (skip)", fmt(l.already_exist))}
-        ${l.no_customer ? row("No Customer Match", l.no_customer, "warning") : ""}
-    </table>`;
-    h += l.no_customer
-        ? `<p>${warn} ${l.no_customer} loans have no matching customer CNIC.</p>`
-        : `<p>${ok} All loans have matching customers.</p>`;
-
-    // ── 6. Repayments ─────────────────────────────────────────────────────────
-    const rep = report.repayments || {};
-    h += `<h5 class="mt-3">Repayments</h5>
-    <table class="table table-sm table-bordered">
-        ${row("Total Rows",                 fmt(rep.total))}
-        ${row("Matched → Active Loans",     fmt(rep.matched_active))}
-        ${row("Matched → Historical Loans", fmt(rep.matched_historical))}
-        ${row("Historical Loans to Create", fmt(rep.historical_loans_to_create))}
-        ${rep.no_customer ? row("No CNIC Match", rep.no_customer, "warning") : ""}
-        ${rep.unmatched   ? row("Unresolvable",  rep.unmatched,   "warning") : ""}
-        ${row("Total to Import", fmt(rep.total_importable), "success")}
-    </table>`;
-
-    // ── 7. Current DB Counts ──────────────────────────────────────────────────
-    const cc = report.current_counts || {};
-    h += `<h5 class="mt-3">Current Data in Frappe</h5>
-    <table class="table table-sm table-bordered">`;
-    Object.entries(cc).forEach(([dt, n]) => {
-        h += `<tr><td>${dt}</td><td>${fmt(n)}</td></tr>`;
-    });
-    h += `</table>`;
-
-    // ── 8. Financial Summary ──────────────────────────────────────────────────
-    const fs   = report.financial_summary   || {};
-    const disb = fs.disbursement            || {};
-    const coll = fs.already_collected       || {};
-    const bal  = fs.balance_remaining       || {};
-    const byS  = fs.loans_by_status         || {};
-    const rept = fs.repayment_transactions  || {};
-    const xck  = rept.cross_check           || {};
-
-    const statusColor = {
-        "Fully Paid"   : "success",  "Current"      : "primary",
-        "Due Today"    : "warning",  "Arrears"      : "danger",
-        "Past Maturity": "danger",   "Restructured" : "info",
-        "Write-Off"    : "dark",
-    };
-
-    h += `<h5 class="mt-3">💰 Disbursement File — Financial Totals</h5>
-    <table class="table table-sm table-bordered">
-        ${row("Total Loans",                         fmt(disb.total_loans))}
-        ${row("Total Disbursed (Principal)",         cur(disb.total_disbursed))}
-        ${row("Total Deductable Fees",               cur(disb.total_deductable_fees))}
-        ${row("Net Cash Released to Borrowers",      cur(disb.total_net_cash_released))}
-        ${row("Total Interest Expected",             cur(disb.total_interest_expected))}
-        ${row("Total Payable (Principal + Interest)",cur(disb.total_payable_principal_plus_interest))}
-    </table>`;
-
-    h += `<h5 class="mt-3">✅ Already Collected (from Disbursement File)</h5>
-    <table class="table table-sm table-bordered">
-        <thead><tr><th>Component</th><th>Amount</th><th>% of Expected</th></tr></thead>
-        <tbody>
-        <tr><td>Total Paid</td><td><b>${cur(coll.total_paid)}</b></td>
-            <td>${pct(coll.total_paid, disb.total_payable_principal_plus_interest)}</td></tr>
-        <tr><td>Principal Paid</td><td>${cur(coll.principal_paid)}</td>
-            <td>${pct(coll.principal_paid, disb.total_disbursed)}</td></tr>
-        <tr><td>Interest Paid</td><td>${cur(coll.interest_paid)}</td>
-            <td>${pct(coll.interest_paid, disb.total_interest_expected)}</td></tr>
-        <tr><td>Penalty Paid</td><td>${cur(coll.penalty_paid)}</td><td>—</td></tr>
-        </tbody>
-    </table>`;
-
-    h += `<h5 class="mt-3">📊 Balance Remaining (Active Portfolio)</h5>
-    <table class="table table-sm table-bordered">
-        <thead><tr><th>Component</th><th>Amount</th><th>% of Expected</th></tr></thead>
-        <tbody>
-        <tr><td><b>Total Outstanding</b></td><td><b>${cur(bal.total_outstanding)}</b></td>
-            <td>${pct(bal.total_outstanding, disb.total_payable_principal_plus_interest)}</td></tr>
-        <tr><td>Principal Balance</td><td>${cur(bal.principal_balance)}</td>
-            <td>${pct(bal.principal_balance, disb.total_disbursed)}</td></tr>
-        <tr><td>Interest Balance</td><td>${cur(bal.interest_balance)}</td>
-            <td>${pct(bal.interest_balance, disb.total_interest_expected)}</td></tr>
-        <tr><td>Penalty Balance</td><td>${cur(bal.penalty_balance)}</td><td>—</td></tr>
-        </tbody>
-    </table>`;
-
-    h += `<h5 class="mt-3">📋 Loans by Source Status</h5>
-    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">`;
-    Object.entries(byS).sort((a, b) => b[1] - a[1]).forEach(([status, count]) => {
-        const color = statusColor[status] || "secondary";
-        h += `<span class="badge badge-${color}" style="font-size:12px;padding:6px 10px">
-                ${status || "(blank)"}: ${fmt(count)}
-              </span>`;
-    });
-    h += `</div>`;
-
-    h += `<h5 class="mt-3">🧾 Repayment File — Transaction Totals</h5>
-    <table class="table table-sm table-bordered">
-        ${row("Total Transactions",     fmt(rept.total_transactions))}
-        ${row("Unique Loans",           fmt(rept.unique_loans))}
-        ${row("Total Amount Collected", cur(rept.total_amount_collected))}
-        ${row("Principal",              cur(rept.principal_collected))}
-        ${row("Interest",               cur(rept.interest_collected))}
-        ${row("Penalty",                cur(rept.penalty_collected))}
-        ${rept.fees_collected ? row("Fees", cur(rept.fees_collected)) : ""}
-    </table>`;
-
-    h += `<h5 class="mt-3">🔍 Cross-Check: Disbursement File vs Repayment File</h5>
-    <table class="table table-sm table-bordered">
-        <thead><tr><th>Metric</th><th>Disbursement File</th><th>Repayment File</th><th>Gap</th></tr></thead>
-        <tbody>
-        <tr><td>Principal Paid</td>
-            <td>${cur(xck.disbursement_file_principal_paid)}</td>
-            <td>${cur(xck.repayment_file_principal_total)}</td>
-            <td>${diff_badge(xck.difference)}</td></tr>
-        <tr><td>Interest Paid</td>
-            <td>${cur(xck.disbursement_file_interest_paid)}</td>
-            <td>${cur(xck.repayment_file_interest_total)}</td>
-            <td>${diff_badge(xck.interest_difference)}</td></tr>
-        </tbody>
-    </table>`;
-
-    const prinDiff = Number(xck.difference || 0);
-    const intDiff  = Number(xck.interest_difference || 0);
-    const gapClass = (prinDiff > 0 || intDiff > 0) ? "alert-warning" : "alert-success";
-    h += `<div class="alert ${gapClass}" style="font-size:12px">
-        ${warn} <b>Note:</b> ${xck.note || ""}
-    </div>`;
-
-    const total_loans_after = (l.will_create || 0) + (l.already_exist || 0) + (rep.historical_loans_to_create || 0);
-    h += `<div class="alert alert-info mt-3">
-        <b>Expected after migration:</b><br>
-        Customers: ~${fmt((c.will_create || 0) + (c.already_exist || 0))}
-        &nbsp;|&nbsp; Loans: ~${fmt(total_loans_after)}
-        &nbsp;|&nbsp; Repayments: ~${fmt(rep.total_importable)} (submitted + GL posted)
-        <br><br>
-        <b>Portfolio being migrated:</b><br>
-        Total Principal: ${cur(disb.total_disbursed)}
-        &nbsp;|&nbsp; Outstanding: ${cur(bal.total_outstanding)}
-        &nbsp;|&nbsp; Fees to book: ${cur(disb.total_deductable_fees)}
-    </div>`;
 
     h += `</div>`;
     return h;
 }
 
-
-// ── Repayment match result renderer ──────────────────────────────────────────
-
 function render_match_repayments_html(res) {
-    const fmt = n  => Number(n  || 0).toLocaleString();
-    const cur = n  => "₨ " + Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmt = n => Number(n || 0).toLocaleString();
+    const cur = n => "₨ " + Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    const s   = res.summary   || {};
+    const s = res.summary || {};
     const unm = res.unmatched || [];
-    const orp = res.orphans   || [];
+    const orp = res.orphans || [];
 
     const matchRate = s.excel_total
         ? ((s.matched / s.excel_total) * 100).toFixed(1)
         : "0.0";
 
     const summaryClass = s.unmatched_count === 0 ? "alert-success" : "alert-warning";
-    const summaryIcon  = s.unmatched_count === 0 ? "fa-check-circle" : "fa-exclamation-triangle";
+    const summaryIcon = s.unmatched_count === 0 ? "fa-check-circle" : "fa-exclamation-triangle";
 
     // ── Download button ───────────────────────────────────────────────────────
     const downloadBtn = res.file_url
@@ -960,10 +763,10 @@ function render_match_repayments_html(res) {
 
     // ── Reason breakdown badges ───────────────────────────────────────────────
     const reasonColors = {
-        "Loan ref not found in ERP at all":                  "danger",
-        "Date and amount both unmatched":                    "danger",
-        "Amount matched but date not found in ERP":          "warning",
-        "Date matched but amount mismatch":                  "warning",
+        "Loan ref not found in ERP at all": "danger",
+        "Date and amount both unmatched": "danger",
+        "Amount matched but date not found in ERP": "warning",
+        "Date matched but amount mismatch": "warning",
         "Date+amount combination already consumed by another row": "info",
     };
 
@@ -983,16 +786,16 @@ function render_match_repayments_html(res) {
 
     // ── Unmatched totals row ──────────────────────────────────────────────────
     const ut = s.unmatched_totals || {};
-    const ot = s.orphan_totals   || {};
+    const ot = s.orphan_totals || {};
 
     // ── Unmatched table (first 100 rows) ─────────────────────────────────────
     let unmTable = "";
     if (unm.length > 0) {
         const reasonIcon = {
-            "Loan ref not found in ERP at all":                  "🔴",
-            "Date and amount both unmatched":                    "🔴",
-            "Amount matched but date not found in ERP":          "🟡",
-            "Date matched but amount mismatch":                  "🟡",
+            "Loan ref not found in ERP at all": "🔴",
+            "Date and amount both unmatched": "🔴",
+            "Amount matched but date not found in ERP": "🟡",
+            "Date matched but amount mismatch": "🟡",
             "Date+amount combination already consumed by another row": "🔵",
         };
 
@@ -1019,7 +822,7 @@ function render_match_repayments_html(res) {
             <tbody>`;
 
         unm.slice(0, 100).forEach(r => {
-            const icon   = reasonIcon[r.reason] || "⚪";
+            const icon = reasonIcon[r.reason] || "⚪";
             const lnLink = r.erp_loan_name
                 ? `<a href="/app/loan/${r.erp_loan_name}" target="_blank">${r.erp_loan_name}</a>`
                 : `<span class="text-danger">—</span>`;
@@ -1027,10 +830,10 @@ function render_match_repayments_html(res) {
                 <td><code style="font-size:10px">${r.loan_ref}</code></td>
                 <td>${lnLink}</td>
                 <td>${r.collection_date}</td>
-                <td style="text-align:right">${Number(r.amount||0).toLocaleString()}</td>
-                <td style="text-align:right">${Number(r.principal_paid||0).toLocaleString()}</td>
-                <td style="text-align:right">${Number(r.interest_paid||0).toLocaleString()}</td>
-                <td style="text-align:right">${Number(r.penalty_paid||0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.amount || 0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.principal_paid || 0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.interest_paid || 0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.penalty_paid || 0).toLocaleString()}</td>
                 <td style="white-space:nowrap">${icon} ${r.reason}</td>
                 <td style="color:#666;font-size:10px">${r.detail || ""}</td>
             </tr>`;
@@ -1064,10 +867,10 @@ function render_match_repayments_html(res) {
                 <td><code style="font-size:10px">${r.loan_ref}</code></td>
                 <td><a href="/app/loan/${r.erp_loan_name}" target="_blank">${r.erp_loan_name}</a></td>
                 <td>${r.posting_date}</td>
-                <td style="text-align:right">${Number(r.amount_paid||0).toLocaleString()}</td>
-                <td style="text-align:right">${Number(r.principal_amount_paid||0).toLocaleString()}</td>
-                <td style="text-align:right">${Number(r.total_interest_paid||0).toLocaleString()}</td>
-                <td style="text-align:right">${Number(r.total_penalty_paid||0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.amount_paid || 0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.principal_amount_paid || 0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.total_interest_paid || 0).toLocaleString()}</td>
+                <td style="text-align:right">${Number(r.total_penalty_paid || 0).toLocaleString()}</td>
             </tr>`;
         });
         orpTable += `</tbody></table></div>`;

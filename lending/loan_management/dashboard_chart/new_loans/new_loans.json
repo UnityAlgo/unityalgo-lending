@@ -10,17 +10,24 @@
  "dynamic_filters_json": "[]",
  "filters_json": "[[\"Loan\",\"docstatus\",\"=\",\"1\",false]]",
  "group_by_type": "Count",
- "idx": 1,
+ "idx": 2,
  "is_public": 0,
  "is_standard": 1,
- "last_synced_on": "2026-04-07 02:26:33.829569",
- "modified": "2026-04-07 02:26:39.529582",
+ "last_synced_on": "2026-06-06 16:48:51.205804",
+ "modified": "2026-06-06 16:50:39.690667",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "New Loans",
  "number_of_groups": 0,
  "owner": "Administrator",
- "roles": [],
+ "roles": [
+  {
+   "role": "Loan Manager"
+  },
+  {
+   "role": "Loan Admin"
+  }
+ ],
  "show_values_over_chart": 0,
  "source": "",
  "time_interval": "Daily",

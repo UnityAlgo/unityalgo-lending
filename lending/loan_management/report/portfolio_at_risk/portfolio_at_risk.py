@@ -63,13 +63,13 @@ def get_columns():
             "fieldtype": "Data",
             "width": 130,
         },
-        {
-            "fieldname": "loan_type",
-            "label": _("Loan Type"),
-            "fieldtype": "Link",
-            "options": "Loan Type",
-            "width": 120,
-        },
+        #{
+        #    "fieldname": "loan_type",
+        #    "label": _("Loan Type"),
+        #    "fieldtype": "Link",
+        #    "options": "Loan Type",
+        #    "width": 120,
+        #},
         {
             "fieldname": "disbursement_date",
             "label": _("Disbursed On"),
@@ -185,9 +185,9 @@ def _fetch_active_loans(as_of_date, branch, loan_type, loan_officer):
     if branch:
         cond += " AND l.branch = %(branch)s"
         params["branch"] = branch
-    if loan_type:
-        cond += " AND l.loan_type = %(loan_type)s"
-        params["loan_type"] = loan_type
+    # if loan_type:
+    #    cond += " AND l.loan_type = %(loan_type)s"
+    #    params["loan_type"] = loan_type
     if loan_officer:
         cond += " AND l.sales_person = %(loan_officer)s"
         params["loan_officer"] = loan_officer
@@ -197,7 +197,6 @@ def _fetch_active_loans(as_of_date, branch, loan_type, loan_officer):
         SELECT
             l.name                                              AS name,
             l.applicant_name                                    AS applicant_name,
-            l.loan_type                                         AS loan_type,
             l.branch                                            AS branch,
             l.sales_person                                      AS loan_officer,
             l.disbursement_date                                 AS disbursement_date,
@@ -371,7 +370,7 @@ def _build_rows(enriched):
                 "applicant_name": loan["applicant_name"],
                 "branch": loan["branch"] or "",
                 "loan_officer": loan["loan_officer"] or "",
-                "loan_type": loan["loan_type"] or "",
+                #"loan_type": loan["loan_type"] or "",
                 "disbursement_date": loan["disbursement_date"],
                 "loan_amount": round(flt(loan["loan_amount"]), 2),
                 "disbursed_amount": round(flt(loan["disbursed_amount"]), 2),

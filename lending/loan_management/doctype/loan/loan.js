@@ -194,11 +194,11 @@ frappe.ui.form.on('Loan', {
 				// }, __('Create'));
 			}
 
-			if (frm.doc.status == "Loan Closure Requested" && frm.doc.is_term_loan && !frm.doc.is_secured_loan) {
+			// if (frm.doc.status == "Loan Closure Requested" && frm.doc.is_term_loan && !frm.doc.is_secured_loan) {
 				frm.add_custom_button(__('Close Loan'), function () {
 					frm.trigger("close_unsecured_term_loan");
 				}, __('Status'));
-			}
+			// }
 		}
 		frm.trigger("toggle_fields");
 	},

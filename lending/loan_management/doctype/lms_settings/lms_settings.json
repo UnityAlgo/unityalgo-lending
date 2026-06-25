@@ -9,7 +9,10 @@
   "allow_multi_loaning_for_each_customer",
   "enable_loan_amount_editing",
   "column_break_ceiv",
-  "max_active_loans_per_guarantor"
+  "max_active_loans_per_guarantor",
+  "section_break_rqyj",
+  "disbursement_tax_account",
+  "disbursement_tax_rate"
  ],
  "fields": [
   {
@@ -45,13 +48,31 @@
    "fieldname": "enable_loan_amount_editing",
    "fieldtype": "Check",
    "label": "Enable Loan Amount Editing"
+  },
+  {
+   "fieldname": "section_break_rqyj",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "Account",
+   "fieldname": "disbursement_tax_account",
+   "fieldtype": "Link",
+   "label": "Disbursement TAX Account",
+   "link_filters": "[[\"Account\",\"is_group\",\"=\",0]]",
+   "options": "Account"
+  },
+  {
+   "fieldname": "disbursement_tax_rate",
+   "fieldtype": "Float",
+   "label": "Disbursement TAX Rate",
+   "non_negative": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-04-03 19:23:53.411466",
+ "modified": "2026-05-25 04:21:28.564498",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "LMS Settings",

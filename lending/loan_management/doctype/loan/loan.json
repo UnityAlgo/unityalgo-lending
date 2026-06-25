@@ -149,7 +149,7 @@
    "in_standard_filter": 1,
    "label": "Status",
    "no_copy": 1,
-   "options": "Sanctioned\nPartially Disbursed\nDisbursed\nLoan Closure Requested\nClosed\nWrite-Off",
+   "options": "Sanctioned\nPartially Disbursed\nDisbursed\nLoan Closure Requested\nClosed\nWrite-Off\nCancelled",
    "read_only": 1
   },
   {
@@ -501,6 +501,7 @@
   {
    "fieldname": "sales_person",
    "fieldtype": "Link",
+   "in_standard_filter": 1,
    "label": "Sales Person",
    "options": "Sales Person",
    "reqd": 1
@@ -512,7 +513,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Repayment Status",
-   "options": "Regular\nOverdue\nMissed Repayment\nArrears\nPast Maturity\nDue Today\nWrite-Off\nFully Paid",
+   "options": "Regular\nOverdue\nMissed Repayment\nArrears\nPast Maturity\nDue Today\nWrite-Off\nFully Paid\nCancelled",
    "read_only": 1
   },
   {
@@ -573,13 +574,14 @@
   {
    "fieldname": "description",
    "fieldtype": "Small Text",
+   "in_standard_filter": 1,
    "label": "description"
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-04-13 03:28:37.995129",
+ "modified": "2026-06-08 21:49:36.605396",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan",

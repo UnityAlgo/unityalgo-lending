@@ -126,16 +126,13 @@
    "reqd": 1
   },
   {
-   "bold": 1,
    "default": "0",
-   "depends_on": "eval: frappe.user.has_role(\"Loan Officer\") && !frappe.user.has_role(\"System Manager\");",
    "fetch_from": "loan_product.maximum_loan_amount",
    "fieldname": "loan_amount",
    "fieldtype": "Currency",
    "in_list_view": 1,
    "label": "Loan Amount",
-   "options": "Company:company:default_currency",
-   "read_only": 1
+   "options": "Company:company:default_currency"
   },
   {
    "fieldname": "column_break_7",
@@ -358,7 +355,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-04-05 22:09:49.992576",
+ "modified": "2026-06-05 11:51:07.278087",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Application",

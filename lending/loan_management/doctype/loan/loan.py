@@ -247,8 +247,8 @@ class Loan(AccountsController):
             total_paid = flt(paid_prin + paid_int, precision)
             is_fully_paid = total_paid >= total_billed
 
-            print(total_paid)
-            print(total_billed)
+            # print(total_paid)
+            # print(total_billed)
 
             if sch_date < current_date and not is_fully_paid:
                 past_due_rows += 1
@@ -429,8 +429,8 @@ class Loan(AccountsController):
             )
             frappe.throw(msg)
 
-        if not self.loan_amount:
-            frappe.throw(_("Loan amount is mandatory"))
+        # if not self.loan_amount:
+        #     frappe.throw(_("Loan amount is mandatory"))
 
     def link_loan_security_pledge(self):
         if self.is_secured_loan and self.loan_application:

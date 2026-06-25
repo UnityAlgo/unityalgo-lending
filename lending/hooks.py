@@ -146,6 +146,7 @@ accounting_dimension_doctypes = [
 scheduler_events = {
     "daily_long": [
         "lending.main.update_loan_repayment_statuses",
+        "lending.main.process_daily_penalties",
         "lending.loan_management.doctype.process_loan_security_shortfall.process_loan_security_shortfall.create_process_loan_security_shortfall",
         "lending.loan_management.doctype.process_loan_interest_accrual.process_loan_interest_accrual.process_loan_interest_accrual_for_term_loans",
         "lending.loan_management.doctype.process_loan_classification.process_loan_classification.create_process_loan_classification",
@@ -256,5 +257,5 @@ global_search_doctypes = {
 fixtures = [
     {"dt": "Custom Field", "filters": [["module", "=", "Loan Management"]]},
     {"dt": "Property Setter", "filters": [["module", "=", "Loan Management"]]},
-    {"dt": "Client Script", "filters": [["module", "=", "Loan Management"]]}
+    {"dt": "Client Script", "filters": [["module", "=", "Loan Management"]]},
 ]

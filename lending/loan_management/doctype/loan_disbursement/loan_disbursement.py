@@ -89,7 +89,6 @@ class LoanDisbursement(AccountsController):
         if not self.posting_date:
             self.posting_date = self.disbursement_date or nowdate()
 
-        # Get loan_amount from the Loan doc (actual approved amount)
         loan_doc = frappe.db.get_value(
             "Loan", self.against_loan, ["loan_amount"], as_dict=1
         )
@@ -242,12 +241,15 @@ class LoanDisbursement(AccountsController):
         gle_map = []
         if not self.disbursed_amount:
             return
-
         total_charges = sum(
             flt(c.amount) for c in self.get("loan_disbursement_charges")
         )
+        
         net_disbursement = flt(self.disbursed_amount) - total_charges
-
+        
+        # lms_settings = frappe.get_doc("LMS Settings", "LMS Settings")
+        # if lms_settings.disbursement_tax_rate and lms_settings.disbursement_tax_account:
+        #     ...
         # DR Loan Account: full loan amount (what borrower owes)
         gle_map.append(
             self.get_gl_dict(
@@ -268,7 +270,6 @@ class LoanDisbursement(AccountsController):
             )
         )
 
-        # CR Bank: net amount (cash given to borrower)
         gle_map.append(
             self.get_gl_dict(
                 {
@@ -327,7 +328,6 @@ class LoanDisbursement(AccountsController):
                 )
             )
 
-        # CR Charge Income: each charge amount
         for charge in self.get("loan_disbursement_charges"):
             gle_map.append(
                 self.get_gl_dict(

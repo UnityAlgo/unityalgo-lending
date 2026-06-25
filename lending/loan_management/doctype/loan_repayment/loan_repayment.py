@@ -17,9 +17,6 @@ from lending.loan_management.doctype.loan_interest_accrual.loan_interest_accrual
     get_last_accrual_date,
     get_per_day_interest,
 )
-from lending.loan_management.doctype.loan_security_shortfall.loan_security_shortfall import (
-    update_shortfall_status,
-)
 from lending.loan_management.doctype.process_loan_classification.process_loan_classification import (
     create_process_loan_classification,
 )
@@ -45,24 +42,25 @@ class LoanRepayment(AccountsController):
 
     def on_submit(self):
 
-        # if self.repayment_type == "Normal Repayment":
-        #     create_process_loan_classification(
-        #         posting_date=self.posting_date,
-        #         loan_product=self.loan_product,
-        #         loan=self.against_loan,
-        #         payment_reference=self.name,
-        #     )
+        if self.repayment_type == "Normal Repayment":
+            create_process_loan_classification(
+                posting_date=self.posting_date,
+                loan_product=self.loan_product,
+                loan=self.against_loan,
+                payment_reference=self.name,
+            )
 
         self.update_paid_amount()
         if self.repayment_type == "Charges Waiver":
             self.make_credit_note()
 
-        loan_doc = frappe.get_doc("Loan", self.against_loan)
         self.make_gl_entries()
+        loan_doc = frappe.get_doc("Loan", self.against_loan)
         loan_doc.set_repayment_status()
 
     def on_cancel(self):
         self.check_future_accruals()
+
         if self.repayment_type in ("Normal Repayment", "Loan Closure"):
             self.mark_as_unpaid()
             if self.is_npa or self.manual_npa:
@@ -91,6 +89,8 @@ class LoanRepayment(AccountsController):
             ["status", "disbursed_amount", "total_principal_paid"],
             as_dict=1,
         )
+        if not loan:
+            return
         if (
             loan.status == "Closed"
             and loan.disbursed_amount > loan.total_principal_paid
@@ -721,7 +721,6 @@ class LoanRepayment(AccountsController):
             update_values.append(self.against_loan)
 
             frappe.db.sql(update_query, tuple(update_values))
-            update_shortfall_status(self.against_loan, self.principal_amount_paid)
 
         if self.is_term_loan:
             schedule_id = frappe.db.get_value(
@@ -766,7 +765,6 @@ class LoanRepayment(AccountsController):
                         or 0
                     )
 
-                    # If this payment fully satisfied the scheduled bucket, mark it accrued!
                     if flt(acc_int, precision) >= flt(
                         sch.interest_amount, precision
                     ) and flt(acc_prin, precision) >= flt(
@@ -793,6 +791,8 @@ class LoanRepayment(AccountsController):
             ],
             as_dict=1,
         )
+        if not loan:
+            return
 
         no_of_repayments = len(self.repayment_details)
 
@@ -1354,6 +1354,7 @@ class LoanRepayment(AccountsController):
             self.principal_amount_paid += interest_paid
 
     def make_gl_entries(self, cancel=0, adv_adj=0):
+
         gle_map = []
         remarks = self.get_remarks()
         payment_account = self.get_payment_account()
@@ -1372,6 +1373,12 @@ class LoanRepayment(AccountsController):
             ],
             as_dict=1,
         )
+
+        if not account_details:
+            return
+        for key, val in account_details.items():
+            if not val:
+                return
 
         if self.total_penalty_paid:
             gle_map.append(
@@ -1419,8 +1426,7 @@ class LoanRepayment(AccountsController):
                         {
                             "account": payment_account,
                             "against": account_details.interest_receivable_account
-                            + ", "
-                            + getattr(self, "penalty_income_account", ""),
+                            or "" + ", " + getattr(self, "penalty_income_account", ""),
                             "debit": repayment.paid_interest_amount,
                             "debit_in_account_currency": repayment.paid_interest_amount,
                             "against_voucher_type": "Loan",
@@ -1560,7 +1566,7 @@ class LoanRepayment(AccountsController):
         ):
             # For Loan Closure, amount_paid includes interest + penalty + principal,
             # so it legitimately exceeds pending_principal_amount. Only block non-closure types.
-            
+
             # if self.repayment_type != "Loan Closure" and flt(
             #     self.amount_paid, precision
             # ) > flt(self.pending_principal_amount, precision):

@@ -13,8 +13,12 @@ frappe.query_reports["Outstanding Loan Portfolio"] = {
 		{
 			"fieldname": "branch",
 			"label": "Branch",
-			"fieldtype": "Link",
-			"options": "Branch",
+			"fieldtype": "MultiSelectList",
+			// "options": "Branch",
+			get_data: (txt) => {
+				return frappe.db.get_link_options("Branch", txt)
+			},
+
 			"reqd": 0
 		},
 		{
@@ -45,10 +49,10 @@ frappe.query_reports["Outstanding Loan Portfolio"] = {
 			"default": 1,
 		},
 		{
-            "fieldname": "loan",
-            "label": __("Loan Account"),
-            "fieldtype": "Link",
-            "options": "Loan"
-        },
+			"fieldname": "loan",
+			"label": __("Loan Account"),
+			"fieldtype": "Link",
+			"options": "Loan"
+		},
 	]
 };

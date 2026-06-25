@@ -62,19 +62,54 @@ def process_loan_interest_accrual_for_demand_loans(
 def process_loan_interest_accrual_for_term_loans(
     posting_date=None, loan_product=None, loan=None
 ):
+    target_date = posting_date or nowdate()
 
-    if not term_loan_accrual_pending(posting_date or nowdate(), loan=loan):
+    if not term_loan_accrual_pending(target_date, loan=loan):
         return
 
-    loan_process = frappe.new_doc("Process Loan Interest Accrual")
-    loan_process.posting_date = posting_date or nowdate()
-    loan_process.loan_product = loan_product
-    loan_process.process_type = "Term Loans"
-    loan_process.loan = loan
+    if loan or posting_date:
+        loan_process = frappe.new_doc("Process Loan Interest Accrual")
+        loan_process.posting_date = target_date
+        loan_process.loan_product = loan_product
+        loan_process.process_type = "Term Loans"
+        loan_process.loan = loan
+        loan_process.submit()
+        return loan_process.name
 
-    loan_process.submit()
+    due_dates = frappe.db.sql_list(
+        """
+        SELECT DISTINCT DATE(rs.payment_date)
+        FROM `tabRepayment Schedule` rs
+        INNER JOIN `tabLoan Repayment Schedule` lrs ON rs.parent = lrs.name
+        INNER JOIN `tabLoan` l ON lrs.loan = l.name
+        WHERE l.docstatus = 1
+          AND l.status = 'Disbursed'
+          AND l.is_term_loan = 1
+          AND lrs.status = 'Active'
+          AND rs.principal_amount > 0
+          AND rs.payment_date <= %(date)s
+          AND rs.is_accrued = 0
+          AND rs.docstatus = 1
+        ORDER BY 1
+    """,
+        {"date": target_date},
+    )
 
-    return loan_process.name
+    for due_date in due_dates:
+        frappe.enqueue(
+            "lending.loan_management.doctype.process_loan_interest_accrual"
+            ".process_loan_interest_accrual.process_loan_interest_accrual_for_term_loans",
+            posting_date=str(due_date),
+            loan_product=loan_product,
+            queue="long",
+            timeout=3600,
+            job_id=f"lia_accrual_{due_date}",
+            is_async=True,
+        )
+
+    frappe.logger().info(
+        f"LIA accrual: enqueued {len(due_dates)} jobs ({due_dates[0] if due_dates else '-'} → {due_dates[-1] if due_dates else '-'})"
+    )
 
 
 def term_loan_accrual_pending(date, loan=None):

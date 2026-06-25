@@ -1,4 +1,1 @@
-$('<style>')
-  .prop('type', 'text/css')
-  .html('.dropdown-help { display: block; }')
-  .appendTo('head');
+$(".nav-item.dropdown.dropdown-help").remove()

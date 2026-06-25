@@ -17,6 +17,7 @@
   "company",
   "branch",
   "applicant",
+  "loan_officer",
   "customer_name",
   "is_term_loan",
   "withhold_security_deposit",
@@ -245,8 +246,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Branch",
-   "options": "Branch",
-   "reqd": 1
+   "options": "Branch"
   },
   {
    "default": "0",
@@ -270,12 +270,19 @@
    "in_list_view": 1,
    "label": "Customer Name",
    "read_only": 1
+  },
+  {
+   "fetch_from": "against_loan.sales_person",
+   "fieldname": "loan_officer",
+   "fieldtype": "Link",
+   "label": "Loan Officer",
+   "options": "Sales Person"
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-05-20 14:22:39.506367",
+ "modified": "2026-06-03 17:53:27.166422",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loan Disbursement",

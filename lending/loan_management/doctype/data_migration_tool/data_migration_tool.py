@@ -6,13 +6,86 @@ import re
 from collections import defaultdict
 import csv
 import openpyxl
-
+import traceback
 import frappe
 from frappe.model.document import Document
 from frappe.utils import flt, now_datetime, nowdate
+import decimal
 
-COMMIT_BATCH = 100  # commit after every N repayments (tune up if DB handles it)
-LOG_FLUSH = 100  # flush migration_log to DB every N log calls
+COMMIT_BATCH = 100
+LOG_FLUSH = 100
+
+BRANCH_CODE_MAP = {
+    "70815": "Area Office",
+    "70809": "Shahpur",
+    "85559": "Jhanwarian",
+    "70813": "Sargodha-3",
+    "70812": "Sargodha-2",
+    "70811": "Sargodha-1",
+    "70807": "Talagang",
+    "70814": "SAM",
+    "76702": "Lalian",
+    "82472": "Bhulwal",
+    "69345": "Naushera - NSR",
+    "70806": "Khushab - KHB",
+    "78282": "Jauharabad - JBD-2",
+    "70805": "Jauharabad - JBD-1",
+    "70817": "Head Office - HO",
+}
+
+_branch_cache = {}
+
+
+def _resolve_branch(raw_branch):
+    if not raw_branch:
+        return None
+
+    key = str(raw_branch).strip()
+    if not key or key == "0":
+        return None
+
+    if key in _branch_cache:
+        return _branch_cache[key]
+
+    code_str = key.split(".")[0] if "." in key else key
+    if code_str in BRANCH_CODE_MAP:
+        branch_name = BRANCH_CODE_MAP[code_str]
+        if frappe.db.exists("Branch", branch_name):
+            _branch_cache[key] = branch_name
+            return branch_name
+
+    if frappe.db.exists("Branch", key):
+        _branch_cache[key] = key
+        return key
+
+    match = frappe.db.sql(
+        "SELECT name FROM `tabBranch` WHERE LOWER(name) = LOWER(%s) LIMIT 1",
+        (key,),
+        as_list=True,
+    )
+    if match:
+        _branch_cache[key] = match[0][0]
+        return match[0][0]
+
+    frappe.log_error(
+        f"Branch not found in ERP: raw='{raw_branch}' code='{code_str}'",
+        "DataMigration-BranchResolution",
+    )
+    _branch_cache[key] = None
+    return None
+
+
+def _build_branch_map_from_disbursements(disbursement_rows):
+    branch_map = {}
+    for r in disbursement_rows:
+        loan_no = str(r.get("Loan#") or r.get("Loan #") or "").strip()
+        if not loan_no:
+            continue
+        raw_branch = r.get("Branch") or r.get("branch") or ""
+        branch = _resolve_branch(str(raw_branch).strip())
+        if branch:
+            branch_map[loan_no] = branch
+    return branch_map
 
 
 class DataMigrationTool(Document):
@@ -116,6 +189,10 @@ def run_migration_job(doc_name):
         )
         _log(doc, f"   Historical closed loans to create: {len(hist_index):,}")
 
+        loan_branch_map = _build_branch_map_from_disbursements(disbursement_rows)
+        unique_branches = set(loan_branch_map.values())
+        _log(doc, f"   Branches resolved from file: {sorted(unique_branches)}")
+
         # Step 1: Customers
         if doc.migrate_customers:
             _log(doc, "\n[1/5] Migrating Customers...")
@@ -129,13 +206,14 @@ def run_migration_job(doc_name):
 
         # Step 2: Loan Products
         _log(doc, "\n[2/5] Ensuring Loan Products...")
-        # _ensure_loan_products(doc, disbursement_rows)
+        _ensure_loan_products(doc, disbursement_rows)
 
         # Step 3: Active Loans
+        customer_map = load_all_customers_map()
         if doc.migrate_loans:
             _log(doc, "\n[3/5] Migrating Active Loans...")
             active_map, created, errs = _migrate_loans(
-                doc, disbursement_rows, cnic_to_customer
+                doc, disbursement_rows, customer_map, loan_branch_map
             )
             doc.db_set("loans_created", created)
             errors += errs
@@ -148,7 +226,7 @@ def run_migration_job(doc_name):
         if doc.migrate_historical_loans:
             _log(doc, "\n[4/5] Migrating Historical (Closed) Loans...")
             hist_map, created, errs = _migrate_historical_loans(
-                doc, hist_index, cnic_to_customer
+                doc, hist_index, customer_map, loan_branch_map
             )
             doc.db_set("historical_loans_created", created)
             errors += errs
@@ -163,8 +241,7 @@ def run_migration_job(doc_name):
             errors += errs
             _log(doc, f"   ✅ Submitted: {created:,}  Errors: {errs}", flush=True)
 
-        # Step 5b: Repayments
-        if doc.migrate_repayments:
+            # Step 5b: Repayments
             _log(doc, "\n[5b] Migrating Loan Repayments...")
             created, errs, unmatched = _migrate_repayments(
                 doc, repayment_rows, disbursement_rows, active_map, hist_map
@@ -178,13 +255,20 @@ def run_migration_job(doc_name):
             if unmatched:
                 _log(doc, f"   Unmatched samples: {sorted(unmatched)[:8]}")
 
+        # Step 6: Post-migration LIA patches
+        _log(doc, "\n[6/6] Running post-migration LIA patches...")
+        _patch_fix_is_accrued(doc)
+        _patch_delete_duplicate_lias(doc)
+        _patch_recreate_missing_lias(doc)
+        _patch_fix_detail_links(doc)
+        _patch_verify_lias(doc)
+
         doc.db_set("errors_count", errors)
         doc.db_set("status", "Completed")
         _log(
             doc, f"\n[{now_datetime()}] ✅ MIGRATION COMPLETE — Total errors: {errors}"
         )
 
-        # Close fully paid migrated loans
         try:
             from lending.loan_management.doctype.loan.loan import (
                 close_unsecured_term_loan,
@@ -339,7 +423,7 @@ def _migrated_loan_names(doc_name, conds=""):
     Scoped to MigrationRef:{doc_name} so rolling back one migration
     never touches loans created by a different migration.
     """
-    query = "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus != 2"
+    query = "SELECT name FROM `tabLoan` WHERE description LIKE %s"
     if conds:
         query += f" {conds}"
     return frappe.db.sql_list(query, (f"%MigrationRef:{doc_name}%",))
@@ -349,6 +433,7 @@ def _rollback_repayments(doc):
     deleted = errors = 0
     # FIX: scoped to this migration only via MigrationRef
     loan_names = _migrated_loan_names(doc.name)
+    print(loan_names)
     if not loan_names:
         return deleted, errors
 
@@ -464,7 +549,7 @@ def _rollback_loans(doc):
     deleted = errors = 0
     # FIX: scoped to this migration only via MigrationRef
     loan_names = frappe.db.sql_list(
-        "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus != 2 ORDER BY name DESC",
+        "SELECT name FROM `tabLoan` WHERE description LIKE %s ORDER BY name DESC",
         (f"%MigrationRef:{doc.name}%",),
     )
     _log(doc, f"   Found {len(loan_names):,} loan(s) to delete")
@@ -615,11 +700,7 @@ def _log_flush_all(doc):
 
 
 def _read_excel(file_url: str):
-    # Fix: file_url.split("/")[-1] returns the whole filename (e.g., "file.csv").
-    # Using .endswith is much safer here.
     is_csv = file_url.lower().endswith(".csv")
-
-    # Common setup: both paths need the actual local file path from Frappe
     file_doc = frappe.get_doc("File", {"file_url": file_url})
     file_path = file_doc.get_full_path()
 
@@ -640,10 +721,45 @@ def _read_excel(file_url: str):
     if len(rows) < 2:
         return []
 
-    first = str(rows[0][0] or "").strip()
-    if len(first) > 15 or any(
-        w in first for w in ["Ltd", "Services", "Admin", "Pvt", "Care"]
-    ):
+    _KNOWN_HEADERS = {
+        "full name",
+        "borrower cnic #",
+        "loan#",
+        "loan #",
+        "loan officer",
+        "collection date",
+        "total paid amount",
+        "principal paid",
+        "interest paid",
+        "penalty paid",
+        "fees paid",
+        "disbursed date",
+        "disbursed",
+        "loan product",
+        "status",
+        "interest rate",
+        "outstanding",
+        "deductable fees",
+        "dob",
+        "gender",
+        "mobile",
+        "marital status",
+        "religion",
+        "branch",
+        "cnic expiry date",
+        "parentage/spouse name",
+        "parentage/spouse mobile #",
+    }
+
+    def _header_score(row):
+        return sum(
+            1 for cell in row if str(cell or "").strip().lower() in _KNOWN_HEADERS
+        )
+
+    score0 = _header_score(rows[0])
+    score1 = _header_score(rows[1]) if len(rows) > 1 else 0
+
+    if score1 > score0:
         header_row, data_rows = rows[1], rows[2:]
     else:
         header_row, data_rows = rows[0], rows[1:]
@@ -692,10 +808,10 @@ def _safe_date(val):
 
 
 def _safe_float(val, default=0.0):
-    """FIX-3: strip non-numeric chars before converting ('80%/Year' → 80.0)."""
     if val is None:
         return default
     s = str(val).strip()
+    s = s.replace(",", "")
     if not s:
         return default
     m = re.search(r"[\d]+(?:\.[\d]+)?", s)
@@ -708,9 +824,14 @@ def _safe_float(val, default=0.0):
 
 
 def _cnic(raw):
-    if isinstance(raw, (int, float)):
-        return str(int(raw)).strip()
-    return str(raw or "").strip()
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    try:
+        s = str(int(decimal.Decimal(s)))
+    except Exception:
+        pass
+    return s.replace("-", "").replace(" ", "").strip()
 
 
 def _guess_periods(product_name):
@@ -723,13 +844,34 @@ def _guess_periods(product_name):
     return 6
 
 
-def _build_loan_map_from_db():
+def get_all_loan_map():
     loan_map = {}
+    conds = " AND description LIKE '%LoanRef:%' "
+
     loans = frappe.db.sql(
-        "SELECT name, description FROM `tabLoan` WHERE description LIKE %s AND docstatus = 1",
-        ("%LoanRef:%",),
+        f"SELECT name, description FROM `tabLoan` WHERE docstatus = 1 {conds} ",
         as_dict=True,
     )
+
+    for loan in loans:
+        m = re.search(r"LoanRef:([^\s,]+)", loan.description or "")
+        if m:
+            loan_map[m.group(1).strip()] = loan.name
+    return loan_map
+
+
+def _build_loan_map_from_db(doc=None):
+    loan_map = {}
+    conds = " AND description LIKE '%LoanRef:%' "
+
+    if doc and getattr(doc, "name"):
+        conds = f" AND description LIKE '%MigrationRef:{doc.name}%' "
+
+    loans = frappe.db.sql(
+        f"SELECT name, description FROM `tabLoan` WHERE docstatus = 1 {conds} ",
+        as_dict=True,
+    )
+
     for loan in loans:
         m = re.search(r"LoanRef:([^\s,]+)", loan.description or "")
         if m:
@@ -740,7 +882,6 @@ def _build_loan_map_from_db():
 def _build_historical_loan_index(
     repayment_rows, disbursement_loan_nos, existing_loan_map
 ):
-    """FIX-1: direct Loan# match — no _strip_installment."""
     known = set(disbursement_loan_nos) | set(existing_loan_map.keys())
     grouped = defaultdict(
         lambda: {
@@ -768,6 +909,67 @@ def _build_historical_loan_index(
             if not entry["latest_date"] or date > entry["latest_date"]:
                 entry["latest_date"] = date
     return dict(grouped)
+
+
+# ── Sales Person helper ───────────────────────────────────────────────────────
+
+# Module-level cache: raw "Loan Officer" name → Sales Person docname
+_sales_person_cache = {}
+
+
+def _ensure_sales_person(loan_officer: str):
+    """
+    Return the Sales Person docname for a given Loan Officer string.
+
+    Resolution order:
+      1. Return None for blank / "0" values.
+      2. Return cached result if already resolved this session.
+      3. Look for an existing Sales Person by sales_person_name (case-insensitive).
+      4. Auto-create a new Sales Person under the root group and cache it.
+
+    Safe to call thousands of times per migration — each unique officer name
+    hits the DB at most twice (one SELECT + one INSERT on first encounter only).
+    """
+    if not loan_officer:
+        return None
+    key = loan_officer.strip()
+    if not key or key == "0":
+        return None
+
+    if key in _sales_person_cache:
+        return _sales_person_cache[key]
+
+    existing = frappe.db.get_value("Sales Person", {"sales_person_name": key}, "name")
+    if existing:
+        _sales_person_cache[key] = existing
+        return existing
+
+    try:
+        root_group = (
+            frappe.db.get_value(
+                "Sales Person",
+                {"is_group": 1, "parent_sales_person": ["is", "not set"]},
+                "name",
+            )
+            or "Sales Teams"
+        )
+        sp = frappe.new_doc("Sales Person")
+        sp.sales_person_name = key
+        sp.is_group = 0
+        sp.parent_sales_person = root_group
+        sp.insert(ignore_permissions=True)
+        frappe.db.commit()
+        _sales_person_cache[key] = sp.name
+        return sp.name
+    except Exception:
+        import traceback
+
+        frappe.log_error(
+            f"Could not auto-create Sales Person [{key}]\n{traceback.format_exc()}",
+            "DataMigration-SalesPerson",
+        )
+        _sales_person_cache[key] = None
+        return None
 
 
 # ── Select field maps ─────────────────────────────────────────────────────────
@@ -821,7 +1023,16 @@ def _safe_select(raw, mapping, allowed):
     return None
 
 
-# ── Migration steps ───────────────────────────────────────────────────────────
+def load_all_customers_map():
+    result = {}
+    customers = frappe.db.sql(
+        "SELECT name, custom_cnic_no  from `tabCustomer`  ", as_dict=True
+    )
+
+    for r in customers:
+        result[r.custom_cnic_no] = r.name
+
+    return result
 
 
 def _load_existing_customers(rows):
@@ -859,6 +1070,18 @@ def _migrate_customers(doc, rows):
                 g.gender = gender
                 g.insert(ignore_permissions=True)
 
+            # Branch: resolve from customer row's Branch column, fall back to doc.branch
+            raw_branch = str(r.get("Branch") or r.get("branch") or "").strip()
+            customer_branch = _resolve_branch(raw_branch) or (
+                doc.get("branch") if hasattr(doc, "get") else None
+            )
+
+            # Sales Person: resolve "Loan Officer" column, auto-creating if absent
+            loan_officer = str(r.get("Loan Officer") or "").strip() or None
+            sales_person_name = (
+                _ensure_sales_person(loan_officer) if loan_officer else None
+            )
+
             c = frappe.new_doc("Customer")
             c.customer_name = name
             c.customer_type = "Individual"
@@ -881,6 +1104,10 @@ def _migrate_customers(doc, rows):
                 str(r.get("Parentage/Spouse Mobile #") or "").strip() or None
             )
             c.custom_phone_no_1 = str(r.get("Mobile") or "").strip() or None
+            if customer_branch:
+                c.branch = customer_branch
+            if sales_person_name:
+                c.sales_person = sales_person_name
             c.insert(ignore_permissions=True)
             frappe.db.commit()
 
@@ -966,7 +1193,7 @@ def _ensure_loan_products(doc, rows):
             )
 
 
-def _loan_fields(doc, r, product, disb_date, status="Disbursed"):
+def _loan_fields(doc, r, product, disb_date, status="Disbursed", branch=None):
     prod_data = {}
     if product and frappe.db.exists("Loan Product", product):
         prod_data = (
@@ -993,15 +1220,24 @@ def _loan_fields(doc, r, product, disb_date, status="Disbursed"):
 
     raw_rate = _safe_float(r.get("Interest Rate") if r else 0)
 
+    # Resolve Sales Person from "Loan Officer" column; fall back to doc-level default.
+    loan_officer = str(r.get("Loan Officer") or "").strip() if r else ""
+    sales_person = (
+        _ensure_sales_person(loan_officer) if loan_officer else None
+    ) or doc.sales_person
+
+    # Branch: use passed branch (from disbursement file) → fall back to doc.branch
+    resolved_branch = branch or (doc.get("branch") if hasattr(doc, "get") else None)
+
     loan = frappe.new_doc("Loan")
     loan.applicant_type = "Customer"
     loan.company = doc.company
-    loan.branch = doc.branch
+    loan.branch = resolved_branch
     loan.loan_product = product
     loan.posting_date = disb_date
     loan.disbursement_date = disb_date
     loan.repayment_start_date = disb_date
-    loan.sales_person = doc.sales_person
+    loan.sales_person = sales_person
     loan.status = status
     loan.rate_of_interest = prod_data.get("rate_of_interest") or raw_rate
     loan.penalty_stop_threshold_days = (
@@ -1029,15 +1265,18 @@ def _loan_fields(doc, r, product, disb_date, status="Disbursed"):
     return loan
 
 
-def _migrate_loans(doc, rows, cnic_map):
+def _migrate_loans(doc, rows, cnic_map, loan_branch_map=None):
     loan_map = {}
     created = errors = 0
     existing = _build_loan_map_from_db()
+    loan_branch_map = loan_branch_map or {}
 
     for r in rows:
-        loan_no = str(r.get("Loan#") or r.get("Loan #") or "").strip()
+        raw_loan = r.get("Loan#") or r.get("Loan #")
+        loan_no = str(raw_loan).strip()
         cnic = _cnic(r.get("Borrower CNIC #"))
         customer = cnic_map.get(cnic)
+
         if not loan_no or not customer:
             continue
         if loan_no in existing:
@@ -1046,17 +1285,16 @@ def _migrate_loans(doc, rows, cnic_map):
 
         product = str(r.get("Loan Product") or "").strip() or None
         disb_date = _safe_date(r.get("Disbursed Date")) or nowdate()
-        amount = _safe_float(r.get("Disbursed")) or _safe_float(r.get("Principal"))
-        if not amount:
-            frappe.log_error(
-                f"Loan {loan_no}: both Disbursed and Principal are 0 — skipped",
-                f"DataMigration-{doc.name} Loan[{loan_no}]",
-            )
-            errors += 1
-            continue
+        amount = _safe_float(r.get("Disbursed"))
+
+        # Resolve branch from disbursement file Branch column
+        raw_branch = r.get("Branch") or r.get("branch") or ""
+        branch = _resolve_branch(str(raw_branch).strip()) or loan_branch_map.get(
+            loan_no
+        )
 
         try:
-            loan = _loan_fields(doc, r, product, disb_date, "Disbursed")
+            loan = _loan_fields(doc, r, product, disb_date, "Disbursed", branch=branch)
             loan.applicant = customer
             loan.loan_amount = amount
             loan.disbursed_amount = 0
@@ -1090,10 +1328,11 @@ def _migrate_loans(doc, rows, cnic_map):
     return loan_map, created, errors
 
 
-def _migrate_historical_loans(doc, hist_index, cnic_map):
+def _migrate_historical_loans(doc, hist_index, cnic_map, loan_branch_map=None):
     loan_map = {}
     created = errors = 0
     existing = _build_loan_map_from_db()
+    loan_branch_map = loan_branch_map or {}
 
     default_product = (
         doc.get("historical_loan_product")
@@ -1116,12 +1355,16 @@ def _migrate_historical_loans(doc, hist_index, cnic_map):
         amount = info["total_principal"] or info["total_amount"] or 1.0
         disb_date = info["earliest_date"] or nowdate()
 
+        # Resolve branch from loan_branch_map (built from disbursement file)
+        branch = loan_branch_map.get(loan_no)
+
         try:
-            loan = _loan_fields(doc, None, default_product, disb_date, "Closed")
+            loan = _loan_fields(
+                doc, None, default_product, disb_date, "Closed", branch=branch
+            )
             loan.applicant = customer
             loan.loan_amount = amount
             loan.disbursed_amount = amount
-            # FIX: embed MigrationRef so rollback is scoped to this migration only
             loan.description = (
                 f"Migrated historical. LoanRef:{loan_no} MigrationRef:{doc.name}"
             )
@@ -1196,13 +1439,8 @@ def _migrate_disbursements(doc, rows, loan_map):
         try:
             lr = loan_data_map.get(loan_doc, {})
 
-            disbursed_amt = _safe_float(r.get("Disbursed")) or _safe_float(
-                r.get("Principal")
-            )
+            disbursed_amt = _safe_float(r.get("Disbursed"))
             deductable_fees = _safe_float(r.get("Deductable Fees"))
-            if not disbursed_amt:
-                continue
-
             d = frappe.new_doc("Loan Disbursement")
             d.against_loan = loan_doc
             d.disbursement_date = _safe_date(r.get("Disbursed Date")) or nowdate()
@@ -1326,31 +1564,163 @@ def _insert_lia_raw(
     return lia_name
 
 
+# ── Raw SQL for Loan Repayment (docstatus=1 directly — bypasses all hooks) ───
+_REP_INSERT = """
+    INSERT INTO `tabLoan Repayment`
+        (name, creation, modified, modified_by, owner, docstatus,
+         against_loan, posting_date, amount_paid, repayment_type,
+         applicant_type, applicant, company, branch,
+         loan_product, is_term_loan, cost_center, sales_person,
+         payment_account, loan_account,
+         principal_amount_paid, total_interest_paid, total_penalty_paid,
+         interest_payable, payable_principal_amount,
+         penalty_amount, pending_principal_amount)
+    VALUES
+        (%s, NOW(), NOW(), %s, %s, 1,
+         %s, %s, %s, 'Normal Repayment',
+         %s, %s, %s, %s,
+         %s, %s, %s, %s,
+         %s, %s,
+         %s, %s, %s,
+         %s, %s,
+         %s, %s)
+"""
+
+_REP_DETAIL_INSERT = """
+    INSERT INTO `tabLoan Repayment Detail`
+        (name, creation, modified, modified_by, owner, docstatus,
+         parent, parenttype, parentfield, idx,
+         loan_interest_accrual, paid_interest_amount,
+         paid_principal_amount, accrual_type)
+    VALUES
+        (%s, NOW(), NOW(), %s, %s, 1,
+         %s, 'Loan Repayment', 'repayment_details', 1,
+         %s, %s, %s, 'Repayment')
+"""
+
+
+def _insert_repayment_raw(
+    rep_name,
+    user,
+    loan_doc,
+    date_str,
+    amount,
+    applicant_type,
+    applicant,
+    company,
+    branch,
+    loan_product,
+    is_term_loan,
+    cost_center,
+    sales_person,
+    payment_account,
+    loan_account,
+    principal_paid,
+    interest_paid,
+    penalty_paid,
+    pending_principal,
+    lia_name,
+):
+    """
+    Insert Loan Repayment + Detail row directly via SQL with docstatus=1.
+
+    Skips ALL on_submit hooks intentionally:
+      - book_unaccrued_interest  → LIA already inserted via _insert_lia_raw
+      - book_unaccrued_penalty   → penalty LIA already inserted
+      - update_paid_amount       → handled by _bulk_update_loan_totals after batch
+      - make_gl_entries          → run create_missing_accrual_gl_entries post-migration
+      - set_repayment_status     → run fix_repayment_statuses post-migration
+
+    Name is pre-generated → eliminates tabSeries SELECT...FOR UPDATE lock.
+    """
+    frappe.db.sql(
+        _REP_INSERT,
+        (
+            rep_name,
+            user,
+            user,
+            loan_doc,
+            date_str,
+            amount,
+            applicant_type,
+            applicant,
+            company,
+            branch,
+            loan_product,
+            is_term_loan,
+            cost_center,
+            sales_person,
+            payment_account,
+            loan_account,
+            principal_paid,
+            interest_paid,
+            penalty_paid,
+            interest_paid,  # interest_payable = interest_paid (matches Excel)
+            principal_paid,  # payable_principal_amount = principal_paid
+            penalty_paid,
+            pending_principal,
+        ),
+    )
+
+    if lia_name:
+        detail_name = frappe.generate_hash(length=10)
+        frappe.db.sql(
+            _REP_DETAIL_INSERT,
+            (
+                detail_name,
+                user,
+                user,
+                rep_name,
+                lia_name,
+                interest_paid,
+                principal_paid,
+            ),
+        )
+
+
+def _bulk_update_loan_totals(loan_delta_map):
+    """
+    After each COMMIT_BATCH, apply accumulated principal/interest/penalty/amount
+    deltas to tabLoan in one UPDATE per loan.
+
+    Replaces the per-repayment UPDATE that update_paid_amount() was doing
+    inside rep.submit() — eliminates the N+1 tabLoan lock contention.
+
+    loan_delta_map: { loan_name → {principal, interest, penalty, amount} }
+    """
+    for loan_name, delta in loan_delta_map.items():
+        frappe.db.sql(
+            """
+            UPDATE `tabLoan`
+            SET
+                total_principal_paid = COALESCE(total_principal_paid, 0) + %s,
+                total_amount_paid    = COALESCE(total_amount_paid,    0) + %s,
+                total_interest_paid  = COALESCE(total_interest_paid,  0) + %s,
+                total_penalty_paid   = COALESCE(total_penalty_paid,   0) + %s
+            WHERE name = %s
+        """,
+            (
+                delta["principal"],
+                delta["amount"],
+                delta["interest"],
+                delta["penalty"],
+                loan_name,
+            ),
+        )
+
+
 def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
-    """
-    Repayment migration — full performance overhaul.
-
-    Key changes vs original:
-      PERF-1  Loan fields pre-fetched in ONE bulk SQL before the loop.
-      PERF-2  LIAs inserted via raw SQL (_insert_lia_raw) — no ORM overhead.
-      PERF-3  Loan Repayment built with frappe.new_doc but insert is faster
-              because loan fields are already in memory (no get_value per row).
-      PERF-4  Commit every COMMIT_BATCH rows — not every LIA set_value.
-      PERF-5  Dedup set uses int(amount*100) key — no float formatting drift.
-      PERF-7  cost_center / income_account caches extended.
-      PERF-11 Dedup key normalised.
-      PERF-12 source_status_map built from in-memory disbursement_rows.
-
-    All original BUG fixes (A-H) and FIX-6 are preserved.
-    """
     import traceback
+    import time as _time
+
+    # Set session lock timeout for the entire migration job
+    frappe.db.sql("SET SESSION innodb_lock_wait_timeout = 14400")
 
     created = errors = 0
     unmatched = set()
     user = frappe.session.user or "Administrator"
 
-    # PERF-6: merge all loan maps once
-    full_map = _build_loan_map_from_db()
+    full_map = get_all_loan_map()
     full_map.update(active_map)
     full_map.update(hist_map)
 
@@ -1358,7 +1728,6 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
         _log(doc, "   No loans found in DB — skipping repayments")
         return created, errors, unmatched
 
-    # ── PERF-1: Bulk-fetch ALL loan fields needed in the loop ─────────────────
     all_loan_names = list(set(full_map.values()))
     _LOAN_FIELDS = (
         "name, applicant_type, applicant, company, branch, loan_product, "
@@ -1368,11 +1737,12 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
         "refund_amount, disbursed_amount, loan_amount, status"
     )
     loan_cache = {}
-    CHUNK = 500  # IN clause limit safety
+    CHUNK = 500
     for i in range(0, len(all_loan_names), CHUNK):
         chunk = all_loan_names[i : i + CHUNK]
         rows_db = frappe.db.sql(
-            f"SELECT {_LOAN_FIELDS} FROM `tabLoan` WHERE name IN ({','.join(['%s'] * len(chunk))})",
+            f"SELECT {_LOAN_FIELDS} FROM `tabLoan` "
+            f"WHERE name IN ({','.join(['%s'] * len(chunk))})",
             tuple(chunk),
             as_dict=True,
         )
@@ -1381,7 +1751,6 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
 
     _log(doc, f"   Pre-fetched {len(loan_cache):,} loan records into memory")
 
-    # ── Per-product / per-company caches ─────────────────────────────────────
     _cost_center_cache = {}
 
     def _get_cost_center(company):
@@ -1406,18 +1775,17 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
             ) or doc.interest_income_account
         return _income_acct_cache[loan_product]
 
-    # PERF-12: source_status_map from in-memory disbursement_rows
     source_status_map = {
         str(dr.get("Loan#") or dr.get("Loan #") or "").strip(): str(
             dr.get("Status") or ""
         ).strip()
         for dr in (disbursement_rows or [])
-        if dr.get("Loan#")
+        if dr.get("Loan#") or dr.get("Loan #")
     }
 
     fully_paid_loan_nos = set()
 
-    # BUG-B: sort oldest-first per loan
+    # Sort oldest-first per loan so pending_principal is calculated correctly
     loan_groups = defaultdict(list)
     for r in rows:
         loan_no_key = str(r.get("Loan#") or r.get("Loan #") or "").strip()
@@ -1428,7 +1796,7 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
         reps.sort(key=lambda x: _safe_date(x.get("Collection Date")) or "9999-99-99")
         sorted_rows.extend(reps)
 
-    # PERF-5: dedup key uses int(amount*100) to avoid float string issues
+    # Build dedup set from existing repayments
     existing = set(
         f"{r[0]}_{r[1]}_{int(round(float(r[2] or 0) * 100))}"
         for r in frappe.db.sql(
@@ -1437,8 +1805,15 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
         )
     )
 
-    batch_lias = []  # names of LIAs inserted this batch (for commit tracking)
     batch_count = 0
+    loan_delta_map = defaultdict(
+        lambda: {
+            "principal": 0.0,
+            "interest": 0.0,
+            "penalty": 0.0,
+            "amount": 0.0,
+        }
+    )
 
     for r in sorted_rows:
         loan_no = str(r.get("Loan#") or r.get("Loan #") or "").strip()
@@ -1457,30 +1832,39 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
         )
         if not date_str:
             frappe.log_error(
-                f"Repayment row skipped — no valid Collection Date  "
-                f"Loan[{loan_no}]  Amount[{r.get('Amount')}]",
+                f"Repayment row skipped — no valid Collection Date "
+                f"Loan[{loan_no}] Amount[{r.get('Total Paid Amount')}]",
                 f"DataMigration-{doc.name} RepNoDate",
             )
             errors += 1
             continue
 
-        amount = _safe_float(r.get("Total Paid Amount"))
         principal_paid = _safe_float(r.get("Principal Paid"))
         interest_paid = _safe_float(r.get("Interest Paid"))
         penalty_paid = _safe_float(r.get("Penalty Paid"))
         fees_paid = _safe_float(r.get("Fees Paid"))
+        sales_person = r.get("Loan Officer") or doc.sales_person
 
-        # BUG-G: fold fees into principal
+        # Fold fees into principal (matches existing migration behaviour)
         if fees_paid > 0:
             principal_paid += fees_paid
 
-        # PERF-5: normalised dedup key
+        # Robust total — fallback to component sum if column missing/zero
+        amount = _safe_float(r.get("Total Paid Amount"))
+        if not amount:
+            for col in ("Total Paid", "Amount Paid", "Paid Amount", "Total Payment"):
+                amount = _safe_float(r.get(col))
+                if amount:
+                    break
+        if not amount:
+            amount = principal_paid + interest_paid + penalty_paid
+
+        # Dedup check
         dupe_key = f"{loan_doc}_{date_str}_{int(round(amount * 100))}"
         if dupe_key in existing:
             continue
 
         try:
-            # PERF-1: read from cache, not DB
             lr = loan_cache.get(loan_doc, {})
 
             company = lr.get("company") or doc.company
@@ -1492,9 +1876,10 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
             applicant_type = lr.get("applicant_type", "Customer")
             applicant = lr.get("applicant")
             income_account = _get_income_acct(loan_product)
+            is_term_loan = lr.get("is_term_loan", 1)
             pending_principal = _get_pending_principal(lr)
 
-            # PERF-2/FIX-6: LIA via raw SQL INSERT with docstatus=1 directly
+            # Insert LIA via raw SQL (already fast — keep as-is)
             lia_name = None
             if interest_paid > 0 or principal_paid > 0:
                 lia_name = _insert_lia_raw(
@@ -1530,82 +1915,67 @@ def _migrate_repayments(doc, rows, disbursement_rows, active_map, hist_map):
                     user,
                 )
 
-            # PERF-3: build repayment via frappe.new_doc (submit hooks required)
-            rep = frappe.new_doc("Loan Repayment")
-            rep.flags.ignore_validate = True  # BUG-A: preserve Excel amounts
-            rep.flags.ignore_mandatory = True
+            # ── FAST PATH: raw SQL insert — no hooks, no series lock ──────────
+            rep_name = f"LR-MIG-{frappe.generate_hash(length=10)}"
+            _insert_repayment_raw(
+                rep_name,
+                user,
+                loan_doc,
+                date_str,
+                amount,
+                applicant_type,
+                applicant,
+                company,
+                branch,
+                loan_product,
+                is_term_loan,
+                cost_center,
+                sales_person,
+                payment_account,
+                loan_account,
+                principal_paid,
+                interest_paid,
+                penalty_paid,
+                pending_principal,
+                lia_name,
+            )
 
-            rep.against_loan = loan_doc
-            rep.posting_date = date_str  # BUG-H
-            rep.amount_paid = amount
-            rep.repayment_type = "Normal Repayment"
-            rep.applicant_type = applicant_type
-            rep.applicant = applicant
-            rep.company = company
-            rep.branch = branch
-            rep.loan_product = loan_product
-            rep.is_term_loan = lr.get("is_term_loan", 1)
-            rep.cost_center = cost_center
-            rep.payment_account = payment_account
-            rep.loan_account = loan_account
-            rep.principal_amount_paid = principal_paid
-            rep.total_interest_paid = interest_paid
-            rep.total_penalty_paid = penalty_paid
-            rep.interest_payable = interest_paid  # BUG-E
-            rep.payable_principal_amount = principal_paid
-            rep.penalty_amount = penalty_paid  # BUG-C/F
-            rep.pending_principal_amount = pending_principal
-
-            if lia_name:
-                rep.append(
-                    "repayment_details",
-                    {
-                        "loan_interest_accrual": lia_name,
-                        "paid_interest_amount": interest_paid,
-                        "paid_principal_amount": principal_paid,
-                        "accrual_type": "Repayment",
-                    },
+            # Update in-memory cache so next repayment for the same loan
+            # gets a correct pending_principal without a DB hit
+            if loan_doc in loan_cache:
+                loan_cache[loan_doc]["total_principal_paid"] = (
+                    flt(loan_cache[loan_doc].get("total_principal_paid") or 0)
+                    + principal_paid
                 )
 
-            rep.insert(ignore_permissions=True)
+            # Accumulate deltas for bulk tabLoan update
+            loan_delta_map[loan_doc]["principal"] += principal_paid
+            loan_delta_map[loan_doc]["interest"] += interest_paid
+            loan_delta_map[loan_doc]["penalty"] += penalty_paid
+            loan_delta_map[loan_doc]["amount"] += amount
 
-            try:
-                rep.submit()
-                # PERF-4: Update cache with new principal_paid so next rows
-                # see the correct pending_principal without a DB hit
-                if loan_doc in loan_cache:
-                    loan_cache[loan_doc]["total_principal_paid"] = (
-                        flt(loan_cache[loan_doc].get("total_principal_paid") or 0)
-                        + principal_paid
-                    )
+            existing.add(dupe_key)
+            created += 1
+            batch_count += 1
 
-                existing.add(dupe_key)
-                created += 1
-                batch_count += 1
-
-                # PERF-4: batch commit
-                if batch_count % COMMIT_BATCH == 0:
-                    frappe.db.commit()
-                    _log(doc, f"   ...{created:,} repayments submitted")
-
-            except Exception:
+            # Every COMMIT_BATCH: bulk-update tabLoan totals then commit
+            if batch_count % COMMIT_BATCH == 0:
+                _bulk_update_loan_totals(loan_delta_map)
                 frappe.db.commit()
-                frappe.log_error(
-                    f"Repayment submit failed (draft kept) "
-                    f"Loan[{loan_no}] Date[{date_str}] Amt[{amount}]\n"
-                    f"{traceback.format_exc()}",
-                    f"DataMigration-{doc.name} RepSubmit",
-                )
-                errors += 1
+                loan_delta_map.clear()
+                _log(doc, f"   ...{created:,} repayments inserted")
 
         except Exception:
+            frappe.db.rollback()
             frappe.log_error(
                 traceback.format_exc(),
                 f"DataMigration-{doc.name} Rep[{loan_no}]",
             )
             errors += 1
 
-    # Final commit for any remainder
+    # Final flush for any remainder in the last partial batch
+    if loan_delta_map:
+        _bulk_update_loan_totals(loan_delta_map)
     frappe.db.commit()
 
     if fully_paid_loan_nos:
@@ -1710,6 +2080,588 @@ def _get_pending_principal(loan):
     )
 
 
+# ── Post-migration LIA patches ────────────────────────────────────────────────
+# These run automatically at the end of run_migration_job (Step 6).
+# They fix the is_accrued flag, duplicate LIAs, missing LIAs, and
+# wrong repayment detail links — issues that arise because _insert_lia_raw
+# bypasses all Frappe hooks and never sets repayment_schedule_name.
+
+
+def _patch_fix_is_accrued(doc):
+    """
+    Patch 1 — Fix is_accrued flag on Repayment Schedule rows.
+
+    ROOT CAUSE: _insert_lia_raw never sets repayment_schedule_name on the LIA,
+    so the standard accrual job never flips is_accrued=1. This causes the
+    scheduler to try to re-accrue all migrated loans every night and time out.
+
+    LOGIC: Walk each loan's schedule rows cumulatively. If the sum of LIA
+    principal coverage reaches a complete installment boundary → mark is_accrued=1.
+    Mid-installment loans (partial payment) are left for the scheduler.
+    """
+    from frappe.utils import flt, cint, getdate
+    from collections import defaultdict
+
+    _log(doc, "   [Patch 1] Fixing is_accrued flags...")
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
+    BOUNDARY_TOLERANCE = 0.5
+
+    # Only loans from this migration run
+    loan_names = frappe.db.sql_list(
+        "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus=1",
+        (f"%MigrationRef:{doc.name}%",),
+    )
+    if not loan_names:
+        _log(doc, "   [Patch 1] No loans found — skipped")
+        return
+
+    ph = ",".join(["%s"] * len(loan_names))
+
+    # LIA principal per loan
+    lia_rows = frappe.db.sql(
+        f"""SELECT lia.loan, SUM(lia.payable_principal_amount) AS lia_prin
+            FROM `tabLoan Interest Accrual` lia
+            WHERE lia.docstatus=1 AND lia.accrual_type='Repayment'
+              AND lia.loan IN ({ph})
+            GROUP BY lia.loan""",
+        tuple(loan_names),
+        as_dict=True,
+    )
+    lia_map = {r.loan: flt(r.lia_prin, precision) for r in lia_rows}
+
+    if not lia_map:
+        _log(doc, "   [Patch 1] No LIAs found — skipped")
+        return
+
+    lia_loan_names = list(lia_map.keys())
+    lph = ",".join(["%s"] * len(lia_loan_names))
+
+    # Schedule rows
+    sched_rows = frappe.db.sql(
+        f"""SELECT lrs.loan, rs.name, rs.payment_date,
+                   rs.principal_amount, rs.is_accrued
+            FROM `tabRepayment Schedule` rs
+            INNER JOIN `tabLoan Repayment Schedule` lrs ON lrs.name = rs.parent
+            WHERE lrs.docstatus=1 AND lrs.loan IN ({lph})
+            ORDER BY lrs.loan, rs.idx ASC""",
+        tuple(lia_loan_names),
+        as_dict=True,
+    )
+
+    sched_map = defaultdict(list)
+    for r in sched_rows:
+        sched_map[r.loan].append(r)
+
+    to_mark = []
+    for loan, lia_prin in lia_map.items():
+        rows = sched_map.get(loan, [])
+        if not rows:
+            continue
+
+        total_sched = flt(
+            sum(flt(r.principal_amount, precision) for r in rows), precision
+        )
+
+        if lia_prin >= total_sched - BOUNDARY_TOLERANCE:
+            # Over-covered or exact — mark all past-due unaccrued rows
+            to_mark.extend([r.name for r in rows if not r.is_accrued])
+            continue
+
+        # Walk installments cumulatively
+        cumul = 0.0
+        for r in rows:
+            if r.is_accrued:
+                cumul = flt(cumul + flt(r.principal_amount, precision), precision)
+                continue
+            p = flt(r.principal_amount, precision)
+            cumul = flt(cumul + p, precision)
+            if cumul <= lia_prin + BOUNDARY_TOLERANCE:
+                to_mark.append(r.name)
+                if abs(lia_prin - cumul) <= BOUNDARY_TOLERANCE:
+                    break
+            else:
+                break  # mid-installment — leave for scheduler
+
+    if not to_mark:
+        _log(doc, "   [Patch 1] Nothing to mark — skipped")
+        return
+
+    # Bulk update in chunks
+    chunk_size = 500
+    updated = 0
+    for i in range(0, len(to_mark), chunk_size):
+        batch = to_mark[i : i + chunk_size]
+        bph = ",".join(["%s"] * len(batch))
+        frappe.db.sql(
+            f"UPDATE `tabRepayment Schedule` SET is_accrued=1 WHERE name IN ({bph})",
+            tuple(batch),
+        )
+        updated += len(batch)
+
+    frappe.db.commit()
+    _log(
+        doc,
+        f"   [Patch 1] ✅ Marked {updated:,} schedule rows is_accrued=1",
+        flush=True,
+    )
+
+
+def _patch_delete_duplicate_lias(doc):
+    """
+    Patch 2 — Delete duplicate Repayment LIAs.
+
+    CAUSE: Migration may run in multiple passes, each inserting LIAs without
+    a dedup check (unlike repayments which have a date+amount guard).
+
+    STRATEGY: For each (loan, date) group with count > 1, the LIA linked via
+    tabLoan Repayment Detail is the KEEPER. Unlinked duplicates are deleted.
+    Repoints detail rows before deleting to avoid orphan links.
+    """
+    from frappe.utils import flt
+    from collections import defaultdict
+
+    _log(doc, "   [Patch 2] Deleting duplicate LIAs...")
+
+    loan_names = frappe.db.sql_list(
+        "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus=1",
+        (f"%MigrationRef:{doc.name}%",),
+    )
+    if not loan_names:
+        _log(doc, "   [Patch 2] No loans — skipped")
+        return
+
+    ph = ",".join(["%s"] * len(loan_names))
+
+    # Get all Repayment LIAs for these loans
+    lias = frappe.db.sql(
+        f"""SELECT name, loan, DATE(due_date) as dt,
+                   interest_amount, payable_principal_amount
+            FROM `tabLoan Interest Accrual`
+            WHERE loan IN ({ph}) AND docstatus=1 AND accrual_type='Repayment'
+            ORDER BY loan, due_date""",
+        tuple(loan_names),
+        as_dict=True,
+    )
+
+    # Find groups with > 1 LIA
+    groups = defaultdict(list)
+    for r in lias:
+        groups[(r.loan, str(r.dt))].append(r)
+
+    dupe_groups = {k: v for k, v in groups.items() if len(v) > 1}
+    if not dupe_groups:
+        _log(doc, "   [Patch 2] No duplicates found ✅")
+        return
+
+    all_lia_names = [r.name for r in lias]
+    lph = ",".join(["%s"] * len(all_lia_names))
+
+    # LIAs linked via repayment detail = keepers
+    linked = frappe.db.sql(
+        f"SELECT DISTINCT loan_interest_accrual FROM `tabLoan Repayment Detail`"
+        f" WHERE loan_interest_accrual IN ({lph})",
+        tuple(all_lia_names),
+        as_list=True,
+    )
+    linked_set = {r[0] for r in linked}
+
+    to_delete = []
+    for (loan, dt), group in dupe_groups.items():
+        linked_lias = [r for r in group if r.name in linked_set]
+        unlinked_lias = [r for r in group if r.name not in linked_set]
+
+        if linked_lias and unlinked_lias:
+            to_delete.extend([r.name for r in unlinked_lias])
+        # If all linked or all unlinked — ambiguous, skip safely
+
+    if not to_delete:
+        _log(doc, "   [Patch 2] No safe deletions identified ✅")
+        return
+
+    # Verify no GL entries
+    dph = ",".join(["%s"] * len(to_delete))
+    gl_count = frappe.db.sql(
+        f"SELECT COUNT(*) FROM `tabGL Entry`"
+        f" WHERE voucher_type='Loan Interest Accrual'"
+        f" AND voucher_no IN ({dph}) AND is_cancelled=0",
+        tuple(to_delete),
+    )[0][0]
+
+    if gl_count > 0:
+        _log(
+            doc,
+            f"   [Patch 2] ⚠️  {gl_count} GL entries found on duplicates — skipping deletion",
+        )
+        return
+
+    frappe.db.sql(
+        f"UPDATE `tabLoan Interest Accrual` SET docstatus=2 WHERE name IN ({dph})",
+        tuple(to_delete),
+    )
+    frappe.db.commit()
+
+    deleted = 0
+    for name in to_delete:
+        frappe.delete_doc(
+            "Loan Interest Accrual",
+            name,
+            force=True,
+            ignore_permissions=True,
+            delete_permanently=True,
+        )
+        deleted += 1
+        if deleted % 100 == 0:
+            frappe.db.commit()
+
+    frappe.db.commit()
+    _log(doc, f"   [Patch 2] ✅ Deleted {deleted:,} duplicate LIAs", flush=True)
+
+
+def _patch_recreate_missing_lias(doc):
+    """
+    Patch 3 — Recreate LIAs missing for repayments.
+
+    Finds loans where SUM(total_interest_paid) from repayments exceeds
+    SUM(interest_amount) from LIAs by more than 1. For each such repayment
+    with no matching LIA by (loan, date, int, prin) → recreates the LIA.
+    """
+    from frappe.utils import flt
+    from collections import defaultdict
+
+    _log(doc, "   [Patch 3] Recreating missing LIAs...")
+
+    loan_names = frappe.db.sql_list(
+        "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus=1",
+        (f"%MigrationRef:{doc.name}%",),
+    )
+    if not loan_names:
+        _log(doc, "   [Patch 3] No loans — skipped")
+        return
+
+    ph = ",".join(["%s"] * len(loan_names))
+
+    # Find affected loans where repayment interest > LIA interest
+    affected = frappe.db.sql(
+        f"""SELECT l.name AS loan
+            FROM `tabLoan` l
+            LEFT JOIN (
+                SELECT against_loan, SUM(total_interest_paid) AS rep_int,
+                       SUM(principal_amount_paid) AS rep_prin
+                FROM `tabLoan Repayment` WHERE docstatus=1
+                GROUP BY against_loan
+            ) lr ON lr.against_loan = l.name
+            LEFT JOIN (
+                SELECT loan, SUM(interest_amount) AS lia_int,
+                       SUM(payable_principal_amount) AS lia_prin
+                FROM `tabLoan Interest Accrual`
+                WHERE docstatus=1 AND accrual_type='Repayment'
+                GROUP BY loan
+            ) lia ON lia.loan = l.name
+            WHERE l.name IN ({ph})
+              AND COALESCE(lr.rep_int,0) > COALESCE(lia.lia_int,0) + 1""",
+        tuple(loan_names),
+        as_list=True,
+    )
+
+    if not affected:
+        _log(doc, "   [Patch 3] No missing LIAs detected ✅")
+        return
+
+    aff_names = [r[0] for r in affected]
+    aph = ",".join(["%s"] * len(aff_names))
+
+    # Load loan details for _insert_lia_raw
+    loan_details = frappe.db.sql(
+        f"SELECT name, company, branch, applicant_type, applicant, loan_product, cost_center"
+        f" FROM `tabLoan` WHERE name IN ({aph})",
+        tuple(aff_names),
+        as_dict=True,
+    )
+    loan_map = {r.name: r for r in loan_details}
+
+    products = list({r.loan_product for r in loan_details if r.loan_product})
+    if products:
+        pph = ",".join(["%s"] * len(products))
+        income_accts = frappe.db.sql(
+            f"SELECT name, interest_income_account FROM `tabLoan Product` WHERE name IN ({pph})",
+            tuple(products),
+            as_dict=True,
+        )
+        income_map = {r.name: r.interest_income_account for r in income_accts}
+    else:
+        income_map = {}
+
+    # Repayments for affected loans
+    reps = frappe.db.sql(
+        f"""SELECT against_loan, DATE(posting_date) as dt,
+                   total_interest_paid, principal_amount_paid
+            FROM `tabLoan Repayment`
+            WHERE against_loan IN ({aph}) AND docstatus=1
+              AND (total_interest_paid > 0 OR principal_amount_paid > 0)
+            ORDER BY against_loan, posting_date""",
+        tuple(aff_names),
+        as_dict=True,
+    )
+
+    # Existing LIAs by (loan, date, int, prin) signature
+    existing_lias = frappe.db.sql(
+        f"""SELECT loan, DATE(due_date) as dt,
+                   interest_amount, payable_principal_amount
+            FROM `tabLoan Interest Accrual`
+            WHERE loan IN ({aph}) AND docstatus=1 AND accrual_type='Repayment'""",
+        tuple(aff_names),
+        as_dict=True,
+    )
+    existing_set = set()
+    for r in existing_lias:
+        existing_set.add(
+            (
+                r.loan,
+                str(r.dt),
+                round(flt(r.interest_amount), 2),
+                round(flt(r.payable_principal_amount), 2),
+            )
+        )
+
+    user = frappe.session.user or "Administrator"
+    created = errors = 0
+
+    for r in reps:
+        key = (
+            r.against_loan,
+            str(r.dt),
+            round(flt(r.total_interest_paid), 2),
+            round(flt(r.principal_amount_paid), 2),
+        )
+        if key in existing_set:
+            continue
+
+        loan = loan_map.get(r.against_loan)
+        if not loan:
+            continue
+        income_account = (
+            income_map.get(loan.loan_product) or doc.interest_income_account
+        )
+
+        try:
+            _insert_lia_raw(
+                r.against_loan,
+                loan.company,
+                loan.branch,
+                loan.cost_center,
+                str(r.dt),
+                flt(r.total_interest_paid),
+                flt(r.principal_amount_paid),
+                0.0,
+                "Repayment",
+                loan.applicant_type,
+                loan.applicant,
+                income_account,
+                user,
+            )
+            existing_set.add(key)  # prevent re-insert if same loan appears again
+            created += 1
+        except Exception:
+            import traceback
+
+            frappe.log_error(
+                traceback.format_exc(), f"Patch3-MissingLIA-{r.against_loan}"
+            )
+            errors += 1
+
+    frappe.db.commit()
+    _log(
+        doc,
+        f"   [Patch 3] ✅ Created {created:,} missing LIAs  Errors: {errors}",
+        flush=True,
+    )
+
+
+def _patch_fix_detail_links(doc):
+    """
+    Patch 4 — Fix wrong Loan Repayment Detail → LIA links.
+
+    After dedup deletions and recreations, some detail rows may point to
+    the wrong LIA. Fix by matching detail's (loan, date, paid_int, paid_prin)
+    against existing LIA (loan, date, interest_amount, payable_principal_amount).
+    For split repayments (no exact amount match), repoint to any LIA on same date.
+    """
+    from frappe.utils import flt
+    from collections import defaultdict
+
+    _log(doc, "   [Patch 4] Fixing repayment detail links...")
+
+    loan_names = frappe.db.sql_list(
+        "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus=1",
+        (f"%MigrationRef:{doc.name}%",),
+    )
+    if not loan_names:
+        _log(doc, "   [Patch 4] No loans — skipped")
+        return
+
+    ph = ",".join(["%s"] * len(loan_names))
+
+    # Get all repayment details for these loans
+    details = frappe.db.sql(
+        f"""SELECT rd.name, rd.loan_interest_accrual,
+                   rd.paid_interest_amount, rd.paid_principal_amount,
+                   lr.against_loan, DATE(lr.posting_date) as dt
+            FROM `tabLoan Repayment Detail` rd
+            INNER JOIN `tabLoan Repayment` lr ON lr.name = rd.parent
+            WHERE lr.against_loan IN ({ph}) AND lr.docstatus=1""",
+        tuple(loan_names),
+        as_dict=True,
+    )
+
+    if not details:
+        _log(doc, "   [Patch 4] No details found — skipped")
+        return
+
+    aff_loans = list({d.against_loan for d in details})
+    aph = ",".join(["%s"] * len(aff_loans))
+
+    # LIA lookup by (loan, date, int, prin) → [lia_name]
+    lias = frappe.db.sql(
+        f"""SELECT name, loan, DATE(due_date) as dt,
+                   interest_amount, payable_principal_amount
+            FROM `tabLoan Interest Accrual`
+            WHERE loan IN ({aph}) AND docstatus=1 AND accrual_type='Repayment'""",
+        tuple(aff_loans),
+        as_dict=True,
+    )
+
+    lia_lookup = defaultdict(list)  # (loan, date, int, prin) → [names]
+    date_lookup = defaultdict(list)  # (loan, date) → [names]
+    for r in lias:
+        key = (
+            r.loan,
+            str(r.dt),
+            round(flt(r.interest_amount), 2),
+            round(flt(r.payable_principal_amount), 2),
+        )
+        lia_lookup[key].append(r.name)
+        date_lookup[(r.loan, str(r.dt))].append(r.name)
+
+    fixed = skipped = 0
+    for d in details:
+        key = (
+            d.against_loan,
+            str(d.dt),
+            round(flt(d.paid_interest_amount), 2),
+            round(flt(d.paid_principal_amount), 2),
+        )
+        candidates = lia_lookup.get(key, [])
+
+        if candidates and d.loan_interest_accrual in candidates:
+            skipped += 1
+            continue  # already correct
+
+        correct_lia = None
+        if candidates:
+            correct_lia = candidates[0]
+        else:
+            # Split repayment — no exact amount match, use any LIA on same date
+            date_candidates = date_lookup.get((d.against_loan, str(d.dt)), [])
+            if date_candidates:
+                correct_lia = date_candidates[0]
+
+        if correct_lia and correct_lia != d.loan_interest_accrual:
+            frappe.db.sql(
+                "UPDATE `tabLoan Repayment Detail` SET loan_interest_accrual=%s WHERE name=%s",
+                (correct_lia, d.name),
+            )
+            fixed += 1
+
+    frappe.db.commit()
+    _log(
+        doc,
+        f"   [Patch 4] ✅ Fixed {fixed:,} detail links  Already correct: {skipped:,}",
+        flush=True,
+    )
+
+
+def _patch_verify_lias(doc):
+    """
+    Patch 5 — Validate final LIA state and log a summary.
+    Checks: mismatch count, duplicate groups, orphan details.
+    """
+    from frappe.utils import flt
+
+    _log(doc, "   [Patch 5] Validating LIA state...")
+
+    loan_names = frappe.db.sql_list(
+        "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus=1",
+        (f"%MigrationRef:{doc.name}%",),
+    )
+    if not loan_names:
+        _log(doc, "   [Patch 5] No loans — skipped")
+        return
+
+    ph = ",".join(["%s"] * len(loan_names))
+
+    # Mismatch count
+    mismatch = frappe.db.sql(
+        f"""SELECT COUNT(DISTINCT l.name) FROM `tabLoan` l
+            LEFT JOIN (
+                SELECT against_loan, SUM(total_interest_paid) AS rep_int
+                FROM `tabLoan Repayment` WHERE docstatus=1 GROUP BY against_loan
+            ) lr ON lr.against_loan = l.name
+            LEFT JOIN (
+                SELECT loan, SUM(interest_amount) AS lia_int
+                FROM `tabLoan Interest Accrual`
+                WHERE docstatus=1 AND accrual_type='Repayment' GROUP BY loan
+            ) lia ON lia.loan = l.name
+            WHERE l.name IN ({ph})
+              AND ABS(COALESCE(lia.lia_int,0) - COALESCE(lr.rep_int,0)) > 1""",
+        tuple(loan_names),
+    )[0][0]
+
+    # Duplicate groups
+    dupes = frappe.db.sql(
+        f"""SELECT COUNT(*) FROM (
+                SELECT loan, DATE(due_date)
+                FROM `tabLoan Interest Accrual`
+                WHERE docstatus=1 AND accrual_type='Repayment' AND loan IN ({ph})
+                GROUP BY loan, DATE(due_date)
+                HAVING COUNT(*) > 1
+            ) t""",
+        tuple(loan_names),
+    )[0][0]
+
+    # Orphan details
+    orphans = frappe.db.sql(
+        f"""SELECT COUNT(*) FROM `tabLoan Repayment Detail` rd
+            INNER JOIN `tabLoan Repayment` lr ON lr.name = rd.parent
+            LEFT JOIN `tabLoan Interest Accrual` lia ON lia.name = rd.loan_interest_accrual
+            WHERE lr.against_loan IN ({ph})
+              AND rd.loan_interest_accrual IS NOT NULL
+              AND rd.loan_interest_accrual != ''
+              AND lia.name IS NULL""",
+        tuple(loan_names),
+    )[0][0]
+
+    # is_accrued remaining
+    remaining_unaccrued = frappe.db.sql(
+        f"""SELECT COUNT(*) FROM `tabRepayment Schedule` rs
+            INNER JOIN `tabLoan Repayment Schedule` lrs ON lrs.name = rs.parent
+            WHERE lrs.loan IN ({ph}) AND lrs.docstatus=1
+              AND rs.is_accrued=0 AND rs.payment_date < CURDATE()""",
+        tuple(loan_names),
+    )[0][0]
+
+    status = "✅" if mismatch == 0 and dupes == 0 and orphans == 0 else "⚠️"
+    _log(doc, f"   [Patch 5] {status} LIA Validation:")
+    _log(doc, f"             Loans processed         : {len(loan_names):,}")
+    _log(doc, f"             LIA vs rep mismatches   : {mismatch:,}  (target: 0)")
+    _log(doc, f"             Duplicate LIA groups    : {dupes:,}  (target: 0)")
+    _log(doc, f"             Orphan detail rows      : {orphans:,}  (target: 0)")
+    _log(
+        doc,
+        f"             Past-due unaccrued rows : {remaining_unaccrued:,}  (mid-installment — ok)",
+        flush=True,
+    )
+
+
 # ── Whitelisted API ───────────────────────────────────────────────────────────
 
 
@@ -1729,445 +2681,85 @@ def get_status(doc_name):
 
 @frappe.whitelist()
 def validate_migration(doc_name):
-    """Pre-flight validation — returns a report dict, touches no data."""
     doc = frappe.get_doc("Data Migration Tool", doc_name)
-    report = {"config_ok": True, "config_errors": []}
+    report = {"ok": True, "errors": []}
 
-    for label, dt, val in [
-        ("Company", "Company", doc.company),
-        ("Branch", "Branch", doc.branch),
-        ("Sales Person", "Sales Person", doc.sales_person),
-        ("Disbursement Account", "Account", doc.disbursement_account),
-        ("Payment Account", "Account", doc.payment_account),
-        ("Loan Account", "Account", doc.loan_account),
-        ("Interest Income Account", "Account", doc.interest_income_account),
-        ("Interest Receivable", "Account", doc.interest_receivable_account),
-        ("Penalty Income Account", "Account", doc.penalty_income_account),
-        ("Penalty Receivable", "Account", doc.penalty_receivable_account),
-    ]:
-        if not val:
-            report["config_errors"].append(f"{label} is empty")
-            report["config_ok"] = False
-        elif not frappe.db.exists(dt, val):
-            report["config_errors"].append(f"{label}: '{val}' not found")
-            report["config_ok"] = False
-
-    charges_acct = doc.get("charges_income_account")
-    if charges_acct and not frappe.db.exists("Account", charges_acct):
-        report["config_errors"].append(
-            f"Charges Income Account: '{charges_acct}' not found in Accounts"
-        )
-        report["config_ok"] = False
-    elif not charges_acct:
-        report.setdefault("warnings", []).append(
-            "Charges Income Account not set — will fall back to Interest Income Account for fee GL entries"
-        )
-
-    for field in ["customer_file", "disbursement_file", "repayment_file"]:
-        if not doc.get(field):
-            report["config_errors"].append(
-                f"{field.replace('_', ' ').title()} not uploaded"
-            )
-            report["config_ok"] = False
-
-    if not report["config_ok"]:
-        return report
-
-    customer_rows = _read_excel(doc.customer_file)
-    disbursement_rows = _read_excel(doc.disbursement_file)
-    repayment_rows = _read_excel(doc.repayment_file)
-
-    report["row_counts"] = {
-        "customers": len(customer_rows),
-        "disbursements": len(disbursement_rows),
-        "repayments": len(repayment_rows),
+    REQUIRED_COLS = {
+        "customer_file": [
+            "Full Name",
+            "Mobile",
+            "Borrower CNIC #",
+            "Gender",
+            "DOB",
+            "CNIC Expiry Date",
+            "Marital Status",
+            "Religion",
+            "Parentage/Spouse Name",
+            "Parentage/Spouse Mobile #",
+            "Loan Officer",
+        ],
+        "disbursement_file": [
+            "Branch",
+            "Disbursed Date",
+            "Name",
+            "Loan Product",
+            "Loan #",
+            "Disbursed",
+            "Borrower CNIC #",
+            "Interest Rate",
+            "Deductable Fees",
+            "Loan Officer",
+        ],
+        "repayment_file": [
+            "Loan #",
+            "Borrower Name",
+            "Collection Date",
+            "Total Paid Amount",
+            "Principal Paid",
+            "Interest Paid",
+            "Penalty Paid",
+            "Loan Officer",
+        ],
     }
 
-    # ── Column validation ─────────────────────────────────────────────────────
-    # Required: migration will silently produce wrong results if these are absent.
-    # Optional: migration runs but some fields will be blank / defaulted.
-    _CUSTOMER_REQUIRED = [
-        "Full Name",
-        "Borrower CNIC #",
-    ]
-    _CUSTOMER_OPTIONAL = [
-        "DOB",
-        "CNIC Expiry Date",
-        "Gender",
-        "Marital Status",
-        "Religion",
-        "Mobile",
-        "Parentage/Spouse Name",
-        "Parentage/Spouse Mobile #",
-    ]
-    _DISBURSEMENT_REQUIRED = [
-        "Loan#",
-        "Borrower CNIC #",
-        "Loan Product",
-        "Disbursed Date",
-        "Status",
-    ]
-    _DISBURSEMENT_OPTIONAL = [
-        "Disbursed",
-        "Principal",
-        "Interest Rate",
-        "Interest",
-        "Outstanding",
-        "Paid",
-        "Principal Paid",
-        "Interest Paid",
-        "Penalty Paid",
-        "Deductable Fees",
-        "Principal Balance",
-        "Interest Balance",
-        "Penalty Balance",
-    ]
-    _REPAYMENT_REQUIRED = [
-        "Loan#",
-        "Collection Date",
-        "Total Paid Amount",
-    ]
-
-    _REPAYMENT_OPTIONAL = [
-        "Borrower CNIC #",
-        "Principal Paid",
-        "Interest Paid",
-        "Penalty Paid",
-        "Fees Paid",
-    ]
-
-    def _check_columns(rows, required, optional, file_label):
-        """
-        Return a dict describing which required/optional columns are present or missing.
-        Comparison is case-insensitive and strips whitespace so minor header
-        formatting differences don't cause false failures.
-        """
-        if not rows:
-            return {
-                "columns_ok": False,
-                "missing_required": required[:],
-                "missing_optional": optional[:],
-                "present": [],
-                "error": f"{file_label} has no data rows — cannot read headers",
-            }
-
-        actual = {str(k).strip().lower(): str(k).strip() for k in rows[0].keys()}
-        frappe.msgprint(str(actual))
-
-        missing_req = [col for col in required if col.strip().lower() not in actual]
-        missing_opt = [col for col in optional if col.strip().lower() not in actual]
-        present = [
-            actual[col.strip().lower()]
-            for col in (required + optional)
-            if col.strip().lower() in actual
-        ]
-
-        return {
-            "columns_ok": len(missing_req) == 0,
-            "present": present,
-            "missing_required": missing_req,
-            "missing_optional": missing_opt,
-        }
-
-    col_customer = _check_columns(
-        customer_rows, _CUSTOMER_REQUIRED, _CUSTOMER_OPTIONAL, "Customer file"
-    )
-    col_disb = _check_columns(
-        disbursement_rows,
-        _DISBURSEMENT_REQUIRED,
-        _DISBURSEMENT_OPTIONAL,
-        "Disbursement file",
-    )
-    col_repayment = _check_columns(
-        repayment_rows, _REPAYMENT_REQUIRED, _REPAYMENT_OPTIONAL, "Repayment file"
-    )
-
-    report["column_validation"] = {
-        "customer_file": col_customer,
-        "disbursement_file": col_disb,
-        "repayment_file": col_repayment,
-        "columns_ok": col_customer["columns_ok"]
-        and col_disb["columns_ok"]
-        and col_repayment["columns_ok"],
-    }
-
-    # Promote missing required columns to top-level config errors so the caller
-    # sees them immediately and the rest of the validation is skipped.
-    for file_label, col_result in [
-        ("Customer file", col_customer),
-        ("Disbursement file", col_disb),
-        ("Repayment file", col_repayment),
-    ]:
-        for col in col_result["missing_required"]:
-            report["config_errors"].append(
-                f"{file_label}: required column '{col}' is missing"
-            )
-            report["config_ok"] = False
-        for col in col_result.get("missing_optional", []):
-            report.setdefault("warnings", []).append(
-                f"{file_label}: optional column '{col}' is missing — related field will be blank/defaulted"
-            )
-
-    if not report["config_ok"]:
-        return report
-    # ── End column validation ─────────────────────────────────────────────────
-
-    allowed_marital = _get_allowed("custom_marital_status")
-    allowed_religion = _get_allowed("custom_religion")
-    cust_new = cust_existing = cust_skip = 0
-    mar_bad = {}
-    rel_bad = {}
-    for r in customer_rows:
-        cnic = _cnic(r.get("Borrower CNIC #"))
-        name = str(r.get("Full Name") or "").strip()
-        if not name or not cnic or cnic == "0":
-            cust_skip += 1
+    for field, required_cols in REQUIRED_COLS.items():
+        file_url = doc.get(field)
+        if not file_url:
+            report["errors"].append(f"{field.replace('_', ' ').title()} not uploaded")
+            report["ok"] = False
             continue
-        if frappe.db.get_value("Customer", {"custom_cnic_no": cnic}, "name"):
-            cust_existing += 1
-        else:
-            cust_new += 1
-        mar = str(r.get("Marital Status") or "").strip()
-        rel = str(r.get("Religion") or "").strip()
-        if mar and _safe_select(mar, MARITAL_MAP, allowed_marital) is None:
-            mar_bad[mar] = mar_bad.get(mar, 0) + 1
-        if rel and _safe_select(rel, RELIGION_MAP, allowed_religion) is None:
-            rel_bad[rel] = rel_bad.get(rel, 0) + 1
-    report["customers"] = {
-        "will_create": cust_new,
-        "already_exist": cust_existing,
-        "invalid": cust_skip,
-        "marital_unmapped": mar_bad,
-        "religion_unmapped": rel_bad,
-    }
 
-    prods = set(
-        str(r.get("Loan Product") or "").strip()
-        for r in disbursement_rows
-        if r.get("Loan Product")
-    )
-    report["loan_products"] = {
-        "in_excel": len(prods),
-        "existing": len([p for p in prods if frappe.db.exists("Loan Product", p)]),
-        "will_create": sorted(
-            p for p in prods if not frappe.db.exists("Loan Product", p)
-        ),
-        "need_patch": sorted(
-            p
-            for p in prods
-            if frappe.db.exists("Loan Product", p)
-            and not frappe.db.get_value("Loan Product", p, "disbursement_account")
-        ),
-    }
-
-    existing_map = _build_loan_map_from_db()
-    disb_loan_nos = {
-        str(r.get("Loan#") or r.get("Loan #") or "").strip() for r in disbursement_rows
-    }
-    all_cnics = set(_cnic(r.get("Borrower CNIC #")) for r in customer_rows)
-    all_cnics |= set(
-        str(row[0])
-        for row in frappe.db.sql(
-            "SELECT custom_cnic_no FROM `tabCustomer` "
-            "WHERE custom_cnic_no IS NOT NULL AND custom_cnic_no != ''"
-        )
-    )
-    ln_new = ln_exist = ln_no_cust = 0
-    for r in disbursement_rows:
-        ln = str(r.get("Loan#") or r.get("Loan #") or "").strip()
-        cnic = _cnic(r.get("Borrower CNIC #"))
-        if not ln:
-            continue
-        if ln in existing_map:
-            ln_exist += 1
-            continue
-        if cnic not in all_cnics:
-            ln_no_cust += 1
-        ln_new += 1
-    report["loans"] = {
-        "will_create": ln_new,
-        "already_exist": ln_exist,
-        "no_customer": ln_no_cust,
-    }
-
-    hist_index = _build_historical_loan_index(
-        repayment_rows, disb_loan_nos, existing_map
-    )
-    all_ln = disb_loan_nos | set(existing_map.keys())
-    ra = rh = rnc = ru = 0
-    for r in repayment_rows:
-        ln = str(r.get("Loan#") or r.get("Loan #") or "").strip()
-        if ln in all_ln:
-            ra += 1
-        elif ln in hist_index:
-            cnic = hist_index[ln]["cnic"]
-            if cnic and cnic in all_cnics:
-                rh += 1
-            else:
-                rnc += 1
-        else:
-            ru += 1
-    report["repayments"] = {
-        "total": len(repayment_rows),
-        "matched_active": ra,
-        "matched_historical": rh,
-        "historical_loans_to_create": len(hist_index),
-        "no_customer": rnc,
-        "unmatched": ru,
-        "total_importable": ra + rh,
-    }
-
-    report["current_counts"] = {}
-    for dt in [
-        "Customer",
-        "Loan Product",
-        "Loan",
-        "Loan Disbursement",
-        "Loan Repayment",
-    ]:
         try:
-            report["current_counts"][dt] = frappe.db.count(dt)
-        except Exception:
-            report["current_counts"][dt] = 0
+            rows = _read_excel(file_url)
+            if not rows:
+                report["errors"].append(f"{field.replace('_', ' ').title()} is empty")
+                report["ok"] = False
+                continue
 
-    # Financial summary
-    total_disbursed = 0.0
-    total_deductable_fees = 0.0
-    total_net_cash = 0.0
-    total_interest_expected = 0.0
-    total_outstanding = 0.0
-    total_principal_balance = 0.0
-    total_interest_balance = 0.0
-    total_penalty_balance = 0.0
-    total_already_paid = 0.0
-    total_prin_paid_disb = 0.0
-    total_int_paid_disb = 0.0
-    total_pen_paid_disb = 0.0
-    count_by_status = {}
+            actual = {str(k).strip().lower() for k in rows[0].keys()}
+            missing = [c for c in required_cols if c.strip().lower() not in actual]
+            if missing:
+                report["ok"] = False
+                for col in missing:
+                    report["errors"].append(
+                        f"{field.replace('_', ' ').title()}: missing column '{col}'"
+                    )
 
-    for r in disbursement_rows:
-        disbursed = _safe_float(r.get("Disbursed")) or _safe_float(r.get("Principal"))
-        fees = _safe_float(r.get("Deductable Fees"))
-        interest = _safe_float(r.get("Interest"))
-        outstanding = _safe_float(r.get("Outstanding"))
-        paid = _safe_float(r.get("Paid"))
-        prin_paid = _safe_float(r.get("Principal Paid"))
-        int_paid = _safe_float(r.get("Interest Paid"))
-        pen_paid = _safe_float(r.get("Penalty Paid"))
-        prin_bal = _safe_float(r.get("Principal Balance"))
-        int_bal = _safe_float(r.get("Interest Balance"))
-        pen_bal = _safe_float(r.get("Penalty Balance"))
-        status = str(r.get("Status") or "").strip()
-
-        total_disbursed += disbursed
-        total_deductable_fees += fees
-        total_net_cash += disbursed - fees
-        total_interest_expected += interest
-        total_outstanding += outstanding
-        total_already_paid += paid
-        total_prin_paid_disb += prin_paid
-        total_int_paid_disb += int_paid
-        total_pen_paid_disb += pen_paid
-        total_principal_balance += prin_bal
-        total_interest_balance += int_bal
-        total_penalty_balance += pen_bal
-        count_by_status[status] = count_by_status.get(status, 0) + 1
-
-    report["financial_summary"] = {
-        "disbursement": {
-            "total_loans": len(disbursement_rows),
-            "total_disbursed": round(total_disbursed, 2),
-            "total_deductable_fees": round(total_deductable_fees, 2),
-            "total_net_cash_released": round(total_net_cash, 2),
-            "total_interest_expected": round(total_interest_expected, 2),
-            "total_payable_principal_plus_interest": round(
-                total_disbursed + total_interest_expected, 2
-            ),
-        },
-        "already_collected": {
-            "total_paid": round(total_already_paid, 2),
-            "principal_paid": round(total_prin_paid_disb, 2),
-            "interest_paid": round(total_int_paid_disb, 2),
-            "penalty_paid": round(total_pen_paid_disb, 2),
-        },
-        "balance_remaining": {
-            "total_outstanding": round(total_outstanding, 2),
-            "principal_balance": round(total_principal_balance, 2),
-            "interest_balance": round(total_interest_balance, 2),
-            "penalty_balance": round(total_penalty_balance, 2),
-        },
-        "loans_by_status": count_by_status,
-    }
-
-    rep_total_amount = rep_principal = rep_interest = rep_penalty = rep_fees = 0.0
-    rep_loan_nos = set()
-    for r in repayment_rows:
-        rep_total_amount += _safe_float(r.get("Amount"))
-        rep_principal += _safe_float(r.get("Principal Paid"))
-        rep_interest += _safe_float(r.get("Interest Paid"))
-        rep_penalty += _safe_float(r.get("Penalty Paid"))
-        rep_fees += _safe_float(r.get("Fees Paid"))
-        ln = str(r.get("Loan#") or r.get("Loan #") or "").strip()
-        if ln:
-            rep_loan_nos.add(ln)
-
-    report["financial_summary"]["repayment_transactions"] = {
-        "total_transactions": len(repayment_rows),
-        "unique_loans": len(rep_loan_nos),
-        "total_amount_collected": round(rep_total_amount, 2),
-        "principal_collected": round(rep_principal, 2),
-        "interest_collected": round(rep_interest, 2),
-        "penalty_collected": round(rep_penalty, 2),
-        "fees_collected": round(rep_fees, 2),
-        "cross_check": {
-            "disbursement_file_principal_paid": round(total_prin_paid_disb, 2),
-            "repayment_file_principal_total": round(rep_principal, 2),
-            "difference": round(abs(total_prin_paid_disb - rep_principal), 2),
-            "disbursement_file_interest_paid": round(total_int_paid_disb, 2),
-            "repayment_file_interest_total": round(rep_interest, 2),
-            "interest_difference": round(abs(total_int_paid_disb - rep_interest), 2),
-            "note": (
-                "The repayment file covers 01/01/2025 to 31/12/2025 only. "
-                "Payments made before 2025 are not in the repayment file but ARE "
-                "reflected in the disbursement file totals (Principal Paid / Interest Paid columns). "
-                "This explains the ~50%% gap between the two files. "
-                "For fully paid loans with pre-2025 payments, the force-close function "
-                "uses source status from the disbursement file to override the closure."
-            ),
-        },
-    }
+        except Exception as e:
+            report["errors"].append(
+                f"Could not read {field.replace('_', ' ').title()}: {e}"
+            )
+            report["ok"] = False
 
     return report
 
 
-# ── Post-migration reconciliation ─────────────────────────────────────────────
-
-
 @frappe.whitelist()
 def reconcile_loan_paid_amounts(doc_name=None, dry_run=0):
-    """
-    Reconcile paid amounts on Loan records and Loan Interest Accrual records
-    after migration.
-
-    Fixes vs original:
-    BUG-1  branch_conds was built with f-string interpolation (SQL injection).
-           Now uses parameterised query via frappe.db.sql with a params list.
-    BUG-2  branch_conds was appended to the query string but the WHERE clause
-           already had "WHERE 1=1" — the extra AND was fine but the branch value
-           was injected as a raw string instead of a bound param.
-    BUG-3  `import traceback` was inside the function — moved to module level.
-    BUG-4  `skipped` counter was never included in the return dict.
-    BUG-5  A single frappe.db.commit() at the end means one error anywhere
-           rolls back nothing (errors are caught per-loan) but also means a
-           crash mid-loop leaves partial writes uncommitted. Now commits every
-           COMMIT_BATCH loans consistent with the rest of the migration tool.
-    """
     import traceback
 
     precision = int(frappe.db.get_default("currency_precision") or 2)
     dry_run = int(dry_run)
-
-    # BUG-1 / BUG-2 FIX: use parameterised query — never interpolate branch into SQL
     base_query = (
         "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus = 1"
     )
@@ -2193,9 +2785,7 @@ def reconcile_loan_paid_amounts(doc_name=None, dry_run=0):
     updated = errors = skipped = 0
     details = []
 
-    # BUG-5 FIX: batch commits consistent with COMMIT_BATCH pattern in this file
     commit_every = getattr(frappe.local, "COMMIT_BATCH", 100)
-
     for idx, loan_name in enumerate(loan_names, 1):
         try:
             result = _reconcile_single_loan(loan_name, precision, dry_run)
@@ -2210,7 +2800,6 @@ def reconcile_loan_paid_amounts(doc_name=None, dry_run=0):
             errors += 1
             details.append({"loan": loan_name, "error": tb[:300]})
 
-        # BUG-5 FIX: commit in batches so partial progress is not lost
         if not dry_run and idx % commit_every == 0:
             frappe.db.commit()
 
@@ -2221,48 +2810,16 @@ def reconcile_loan_paid_amounts(doc_name=None, dry_run=0):
         "status": "dry_run" if dry_run else "done",
         "total": len(loan_names),
         "updated": updated,
-        "skipped": skipped,  # BUG-4 FIX: was missing from return dict
+        "skipped": skipped,
         "errors": errors,
         "details": details[:50],
     }
 
 
 def _reconcile_single_loan(loan_name, precision, dry_run):
-    """
-    Fixes vs original:
-
-    BUG-6  get_value() for Loan fetched total_interest_paid and total_penalty_paid
-           using a conditional expression inside the field list:
-               "total_interest_paid" if has_column(...) else "loan_amount"
-           This meant when the column didn't exist, the value read into
-           cur_interest_paid / cur_penalty_paid was loan_amount — completely wrong.
-           Fix: check has_column once upfront; build field list cleanly.
-
-    BUG-7  lia_fix_needed logic marks a fix needed whenever accrued != paid on LIAs,
-           then the UPDATE blindly sets paid = accrued on ALL non-Penalty LIAs.
-           This is correct for migration reconciliation BUT it ignores partially-paid
-           LIAs that genuinely have paid < accrued (partial repayments). Those would
-           be overwritten to fully-paid even though they aren't.
-           Fix: instead of setting paid = accrued wholesale, set paid_interest_amount
-           and paid_principal_amount to the actual SUM from repayment_details rows,
-           which is the authoritative source of what has actually been paid per LIA.
-
-    BUG-8  correct_status check compared correct_principal_paid >= loan_amount but
-           loan_amount could be 0 (partially disbursed loan) causing false closure.
-           Fix: guard with disbursed_amount as well, matching get_pending_principal_amount
-           logic in loan_repayment.py.
-
-    BUG-9  has_column() is called multiple times per loan inside the loop —
-           once in the field list build and again in the loan_update block.
-           These are schema-level checks that never change during a run.
-           Fix: call once, cache in local booleans.
-    """
-
-    # BUG-9 FIX: call has_column once per invocation, not 4x
     has_int_paid = frappe.db.has_column("Loan", "total_interest_paid")
     has_pen_paid = frappe.db.has_column("Loan", "total_penalty_paid")
 
-    # ── Repayment totals ──────────────────────────────────────────────────────
     rep_totals = frappe.db.sql(
         """
         SELECT
@@ -2282,7 +2839,6 @@ def _reconcile_single_loan(loan_name, precision, dry_run):
     rep_penalty = flt(rep.get("penalty_paid") or 0, precision)
     rep_amount = flt(rep.get("amount_paid") or 0, precision)
 
-    # ── LIA totals (accrued side) ─────────────────────────────────────────────
     lia_totals = frappe.db.sql(
         """
         SELECT
@@ -2373,8 +2929,6 @@ def _reconcile_single_loan(loan_name, precision, dry_run):
     correct_penalty_paid = rep_penalty
     correct_amount_paid = rep_amount
 
-    # BUG-8 FIX: use disbursed_amount as the threshold (matches
-    # get_pending_principal_amount logic); guard against loan_amount = 0
     closure_threshold = disbursed_amount if disbursed_amount > 0 else loan_amount
     correct_status = cur_status
     if (
@@ -2388,9 +2942,8 @@ def _reconcile_single_loan(loan_name, precision, dry_run):
             else "Loan Closure Requested"
         )
 
-    # ── Determine what needs updating ─────────────────────────────────────────
+    lia_updates = []
     loan_update = {}
-    lia_updates = []  # BUG-7 FIX: per-LIA updates instead of wholesale SET
 
     if abs(cur_principal_paid - correct_principal_paid) > 0.01:
         loan_update["total_principal_paid"] = correct_principal_paid
@@ -2405,8 +2958,6 @@ def _reconcile_single_loan(loan_name, precision, dry_run):
     if correct_status != cur_status:
         loan_update["status"] = correct_status
 
-    # BUG-7 FIX: build per-LIA corrections from repayment_details map
-    # so partial payments are preserved — only update LIAs that are wrong
     all_lias = frappe.db.sql(
         """
         SELECT name, interest_amount, payable_principal_amount,
@@ -2460,42 +3011,50 @@ def _reconcile_single_loan(loan_name, precision, dry_run):
     if dry_run or not changed:
         return result
 
-    # ── Apply updates ─────────────────────────────────────────────────────────
     if loan_update:
         frappe.db.set_value("Loan", loan_name, loan_update, update_modified=False)
 
-    # BUG-7 FIX: update each LIA individually with its correct paid amounts
-    # derived from repayment_details — not a wholesale SET paid = accrued
     if lia_updates:
-        frappe.db.sql(
-            """
-            UPDATE `tabLoan Interest Accrual`
-            SET paid_interest_amount  = %s,
-                paid_principal_amount = %s
-            WHERE name = %s
-            """,
-            lia_updates,
-            auto_commit=False,
-        )
+        for paid_int, paid_prin, lia_name in lia_updates:
+            frappe.db.sql(
+                """
+                UPDATE `tabLoan Interest Accrual`
+                SET paid_interest_amount  = %s,
+                    paid_principal_amount = %s
+                WHERE name = %s
+                """,
+                (paid_int, paid_prin, lia_name),
+                auto_commit=False,
+            )
+
+    # if lia_updates:
+
+    #     frappe.db.sql(
+    #         """
+    #         UPDATE `tabLoan Interest Accrual`
+    #         SET paid_interest_amount  = %s,
+    #             paid_principal_amount = %s
+    #         WHERE name = %s
+    #         """,
+    #         lia_updates,
+    #         auto_commit=False,
+    #     )
 
     return result
 
 
-# ── Post-migration repayment status fix ───────────────────────────────────────
-
-
 @frappe.whitelist()
-def fix_repayment_statuses(dry_run=0):
-    """
-    After migration, repayment_status on all loans is blank or wrong because
-    set_repayment_status() was never called during import.
-    """
+def fix_repayment_statuses(dry_run=0, branch=None):
+
     import traceback
 
     dry_run = int(dry_run)
+    conds = ""
+    if branch is not None:
+        conds += f" AND branch = '{branch}' "
+
     loan_names = frappe.db.sql_list(
-        "SELECT name FROM `tabLoan` WHERE description LIKE %s AND docstatus = 1",
-        ("%LoanRef:%",),
+        f"SELECT name FROM `tabLoan` WHERE description LIKE '%LoanRef:%' AND docstatus = 1 {conds}",
     )
     if not loan_names:
         return {"status": "no_loans", "total": 0}
@@ -2657,10 +3216,6 @@ def _simulate_repayment_status(loan_doc):
 
 @frappe.whitelist()
 def create_missing_accrual_gl_entries(doc_name=None, dry_run=0):
-    """
-    Fix phantom credit balances on Interest Receivable and Penalty Receivable
-    caused by FIX-6 in the migration (LIAs had no GL entries).
-    """
     import traceback
 
     dry_run = int(dry_run)
@@ -2837,18 +3392,6 @@ def _recon_loan_ref(description: str):
 
 @frappe.whitelist()
 def match_repayments_excel(doc_name, tolerance=1.0):
-    """
-    Compare every row in the repayment Excel file attached to this migration
-    against submitted Loan Repayment records in ERPNext.
-
-    Matching key: loan_ref + posting_date (YYYY-MM-DD) + amount_paid (±tolerance)
-
-    Returns a dict with:
-        summary        — counts and totals
-        unmatched      — Excel rows with no ERP counterpart (list of dicts)
-        orphans        — ERP repayments with no Excel counterpart (list of dicts)
-        file_url       — URL of the downloadable Excel report written to /private/files/
-    """
     import traceback
     from collections import defaultdict
 
@@ -2858,7 +3401,6 @@ def match_repayments_excel(doc_name, tolerance=1.0):
     if not doc.repayment_file:
         frappe.throw("No repayment file attached to this migration document.")
 
-    # ── 1. Load ERP repayments ────────────────────────────────────────────────
     erp_rows = frappe.db.sql(
         """
         SELECT
@@ -3017,6 +3559,7 @@ def match_repayments_excel(doc_name, tolerance=1.0):
         "excel_total": valid_excel,
         "matched": matched_count,
         "unmatched_count": len(unmatched),
+        "unmatched_ids": unmatched,
         "orphan_count": len(orphans),
         "unmatched_by_reason": reason_counts,
         "unmatched_totals": {
@@ -3074,7 +3617,6 @@ def match_repayments_excel(doc_name, tolerance=1.0):
                     max_len + 4, 50
                 )
 
-        # ── Sheet 1: Summary ──────────────────────────────────────────────
         ws_sum = wb.active
         ws_sum.title = "Summary"
         ws_sum.column_dimensions["A"].width = 38
@@ -3231,3 +3773,566 @@ def match_repayments_excel(doc_name, tolerance=1.0):
         "orphans": orphans[:500],
         "file_url": file_url,
     }
+
+
+@frappe.whitelist()
+def retry_failed_records_creation(name):
+    res = create_failed_loans_entries(name)
+    return res
+
+
+def create_failed_loans_entries(doc_name):
+    doc = frappe.get_doc("Data Migration Tool", doc_name)
+    lines = []
+
+    def _log(msg):
+        print(msg)
+        lines.append(msg)
+
+    _log("   Reading Excel files...")
+    customer_rows = _read_excel(doc.customer_file)
+    disbursement_rows = _read_excel(doc.disbursement_file)
+    repayment_rows = _read_excel(doc.repayment_file)
+
+    _log(
+        f"Customers: {len(customer_rows):,} | "
+        f"Disbursements: {len(disbursement_rows):,} | "
+        f"Repayments: {len(repayment_rows):,}"
+    )
+
+    cnic_to_customer = {}
+    for r in customer_rows:
+        cnic = _cnic(r.get("Borrower CNIC #"))
+        if cnic:
+            name = frappe.db.get_value("Customer", {"custom_cnic_no": cnic}, "name")
+            if name:
+                cnic_to_customer[cnic] = name
+
+    _log(f"   CNIC→Customer map: {len(cnic_to_customer):,} entries")
+    existing_map = _build_loan_map_from_db(doc)
+    _log(f"   Existing loans in DB: {len(existing_map):,}")
+
+    missing_rows = []
+    existing_rows = []
+    loans_skipped = 0
+
+    for r in disbursement_rows:
+        loan_no = str(r.get("Loan#") or r.get("Loan #") or "").strip()
+        if not loan_no:
+            continue
+        if loan_no in existing_map:
+            existing_rows.append(r)
+            loans_skipped += 1
+        else:
+            missing_rows.append(r)
+
+    _log(f"   Already exist (repayment check): {loans_skipped:,}")
+    _log(f"   Missing loans to create:         {len(missing_rows):,}")
+
+    rep_by_loan = defaultdict(list)
+    for r in repayment_rows:
+        ln = str(r.get("Loan#") or r.get("Loan #") or "").strip()
+        rep_by_loan[ln].append(r)
+
+    for ln in rep_by_loan:
+        rep_by_loan[ln].sort(
+            key=lambda x: _safe_date(x.get("Collection Date")) or "9999-99-99"
+        )
+
+    loans_created = disb_created = repayments_created = errors = 0
+    new_loan_map = {}
+    user = frappe.session.user or "Administrator"
+
+    _cc_cache = {}
+
+    def _get_cc(company):
+        if company not in _cc_cache:
+            _cc_cache[company] = frappe.db.get_value(
+                "Company", company, "cost_center"
+            ) or frappe.db.get_value(
+                "Cost Center", {"is_group": 0, "company": company}, "name"
+            )
+        return _cc_cache[company]
+
+    _ia_cache = {}
+
+    def _get_ia(loan_product):
+        if loan_product not in _ia_cache:
+            _ia_cache[loan_product] = (
+                frappe.db.get_value(
+                    "Loan Product", loan_product, "interest_income_account"
+                )
+                if loan_product
+                else None
+            ) or doc.interest_income_account
+        return _ia_cache[loan_product]
+
+    def _create_repayments_for_loan(loan_name, loan_no, loan_cache_row):
+        from collections import Counter
+
+        rep_rows = rep_by_loan.get(loan_no, [])
+        if not rep_rows:
+            _log(f"   ℹ️  No repayments in Excel for {loan_no}")
+            return 0, 0
+
+        existing_rep_counter = Counter(
+            f"{row[0]}_{row[1]}_{int(round(float(row[2] or 0) * 100))}"
+            for row in frappe.db.sql(
+                "SELECT against_loan, DATE_FORMAT(posting_date,'%%Y-%%m-%%d'), amount_paid "
+                "FROM `tabLoan Repayment` WHERE against_loan=%s AND docstatus < 2",
+                (loan_name,),
+            )
+        )
+
+        created = errs = 0
+        # Accumulate deltas — flushed after each loan's repayments
+        loan_delta = {"principal": 0.0, "interest": 0.0, "penalty": 0.0, "amount": 0.0}
+
+        for rr in rep_rows:
+            col_date = rr.get("Collection Date")
+            date_str = (
+                col_date.strftime("%Y-%m-%d")
+                if hasattr(col_date, "strftime")
+                else _safe_date(col_date)
+            )
+            if not date_str:
+                _log(f"   ⚠️  Rep skip {loan_no} — no collection date")
+                errs += 1
+                continue
+
+            principal_paid = _safe_float(rr.get("Principal Paid"))
+            interest_paid = _safe_float(rr.get("Interest Paid"))
+            penalty_paid = _safe_float(rr.get("Penalty Paid"))
+            fees_paid = _safe_float(rr.get("Fees Paid"))
+
+            if fees_paid > 0:
+                principal_paid += fees_paid
+
+            # Robust total — fallback to component sum if column missing/zero
+            amount = _safe_float(rr.get("Total Paid Amount"))
+            if not amount:
+                for col in (
+                    "Total Paid",
+                    "Amount Paid",
+                    "Paid Amount",
+                    "Total Payment",
+                ):
+                    amount = _safe_float(rr.get(col))
+                    if amount:
+                        break
+            if not amount:
+                amount = principal_paid + interest_paid + penalty_paid
+
+            dupe_key = f"{loan_name}_{date_str}_{int(round(amount * 100))}"
+            if existing_rep_counter[dupe_key] > 0:
+                existing_rep_counter[dupe_key] -= 1
+                continue
+
+            try:
+                company = loan_cache_row.get("company") or doc.company
+                branch = loan_cache_row.get("branch") or doc.branch
+                loan_product = loan_cache_row.get("loan_product")
+                cost_center = _get_cc(company)
+                payment_account = (
+                    loan_cache_row.get("payment_account") or doc.payment_account
+                )
+                loan_account = loan_cache_row.get("loan_account") or doc.loan_account
+                applicant_type = loan_cache_row.get("applicant_type", "Customer")
+                applicant = loan_cache_row.get("applicant")
+                income_account = _get_ia(loan_product)
+                is_term_loan = loan_cache_row.get("is_term_loan", 1)
+                pending_principal = _get_pending_principal(loan_cache_row)
+
+                lia_name = None
+                if interest_paid > 0 or principal_paid > 0:
+                    lia_name = _insert_lia_raw(
+                        loan_name,
+                        company,
+                        branch,
+                        cost_center,
+                        date_str,
+                        interest_paid,
+                        principal_paid,
+                        0.0,
+                        "Repayment",
+                        applicant_type,
+                        applicant,
+                        income_account,
+                        user,
+                    )
+                if penalty_paid > 0:
+                    _insert_lia_raw(
+                        loan_name,
+                        company,
+                        branch,
+                        cost_center,
+                        date_str,
+                        0.0,
+                        0.0,
+                        penalty_paid,
+                        "Penalty",
+                        applicant_type,
+                        applicant,
+                        income_account,
+                        user,
+                    )
+
+                # ── FAST PATH: raw SQL insert — no hooks, no series lock ──────
+                rep_name = f"LR-MIG-{frappe.generate_hash(length=10)}"
+                _insert_repayment_raw(
+                    rep_name,
+                    user,
+                    loan_name,
+                    date_str,
+                    amount,
+                    applicant_type,
+                    applicant,
+                    company,
+                    branch,
+                    loan_product,
+                    is_term_loan,
+                    cost_center,
+                    None,
+                    payment_account,
+                    loan_account,
+                    principal_paid,
+                    interest_paid,
+                    penalty_paid,
+                    pending_principal,
+                    lia_name,
+                )
+
+                # Update in-memory cache for correct pending_principal next row
+                loan_cache_row["total_principal_paid"] = (
+                    flt(loan_cache_row.get("total_principal_paid") or 0)
+                    + principal_paid
+                )
+
+                loan_delta["principal"] += principal_paid
+                loan_delta["interest"] += interest_paid
+                loan_delta["penalty"] += penalty_paid
+                loan_delta["amount"] += amount
+                created += 1
+
+                if (repayments_created + created) % COMMIT_BATCH == 0:
+                    _bulk_update_loan_totals({loan_name: loan_delta})
+                    frappe.db.commit()
+                    loan_delta = {
+                        "principal": 0.0,
+                        "interest": 0.0,
+                        "penalty": 0.0,
+                        "amount": 0.0,
+                    }
+                    _log(f"   ...{repayments_created + created:,} repayments inserted")
+
+            except Exception:
+                tb = traceback.format_exc()
+                frappe.log_error(
+                    tb,
+                    f"RetryMigration-{doc_name} Rep[{loan_no}] {date_str}",
+                )
+                _log(
+                    f"   ❌ Rep FAILED {loan_no} {date_str}:\n      {tb.splitlines()[-1]}"
+                )
+                errs += 1
+
+        # Flush remaining deltas for this loan
+        if any(v > 0 for v in loan_delta.values()):
+            _bulk_update_loan_totals({loan_name: loan_delta})
+            frappe.db.commit()
+
+        return created, errs
+
+    if missing_rows:
+        _log(f"\n── Pass 1: creating {len(missing_rows):,} missing loans ──")
+
+        missing_loan_nos = [
+            str(r.get("Loan#") or r.get("Loan #") or "").strip() for r in missing_rows
+        ]
+        _log(f"   Loan# list: {missing_loan_nos}")
+
+        for r in missing_rows:
+            loan_no = str(r.get("Loan#") or r.get("Loan #") or "").strip()
+            cnic = _cnic(r.get("Borrower CNIC #"))
+            customer = cnic_to_customer.get(cnic)
+
+            if not customer:
+                _log(f"   ⚠️  SKIP {loan_no} — no customer for CNIC {cnic}")
+                errors += 1
+                continue
+
+            product = str(r.get("Loan Product") or "").strip() or None
+            disb_date = _safe_date(r.get("Disbursed Date")) or nowdate()
+
+            raw_amount = _safe_float(r.get("Disbursed"))
+            if not raw_amount:
+                raw_amount = sum(
+                    _safe_float(rr.get("Principal Paid"))
+                    for rr in rep_by_loan.get(loan_no, [])
+                )
+
+            if not raw_amount:
+                _log(f"   ⚠️  SKIP {loan_no} — cannot determine loan amount")
+                errors += 1
+                continue
+            try:
+                loan = _loan_fields(doc, r, product, disb_date, "Disbursed")
+                loan.applicant = customer
+                if not loan.sales_person:  # FIX-A
+                    loan.sales_person = doc.sales_person
+                loan.loan_amount = raw_amount
+                loan.disbursed_amount = 0
+                loan.description = (
+                    f"Migrated (retry). LoanRef:{loan_no} MigrationRef:{doc_name}"
+                )
+                loan.insert(ignore_permissions=True)
+                loan.submit()
+                frappe.db.commit()
+
+                new_loan_map[loan_no] = loan.name
+                loans_created += 1
+                _log(
+                    f"   ✅ Loan created: {loan_no} → {loan.name} (amount={raw_amount})"
+                )
+
+            except Exception:
+                tb = traceback.format_exc()
+                frappe.log_error(tb, f"RetryMigration-{doc_name} Loan[{loan_no}]")
+                _log(f"   ❌ Loan FAILED {loan_no}:\n      {tb.splitlines()[-1]}")
+                errors += 1
+                continue
+
+            # ── Disbursement ───────────────────────────────────────────────────
+            try:
+                lr_data = frappe.db.get_value(
+                    "Loan",
+                    loan.name,
+                    [
+                        "applicant_type",
+                        "applicant",
+                        "company",
+                        "branch",
+                        "loan_product",
+                    ],
+                    as_dict=True,
+                )
+                disbursed_amt = _safe_float(r.get("Disbursed")) or raw_amount
+                deductable_fees = _safe_float(r.get("Deductable Fees"))
+                charges_acct = (
+                    doc.get("charges_income_account") or doc.interest_income_account
+                )
+
+                d = frappe.new_doc("Loan Disbursement")
+                d.against_loan = loan.name
+                d.disbursement_date = disb_date
+                d.disbursed_amount = disbursed_amt
+                d.applicant_type = lr_data.applicant_type
+                d.applicant = lr_data.applicant
+                d.company = lr_data.company
+                d.branch = lr_data.branch
+                d.loan_product = lr_data.loan_product
+
+                if deductable_fees > 0 and charges_acct:
+                    d.append(
+                        "loan_disbursement_charges",
+                        {
+                            "charge": None,
+                            "account": charges_acct,
+                            "amount": deductable_fees,
+                        },
+                    )
+
+                d.insert(ignore_permissions=True)
+                d.submit()
+                frappe.db.commit()
+                disb_created += 1
+                _log(f"   ✅ Disbursement created: {d.name}")
+
+            except Exception:
+                tb = traceback.format_exc()
+                frappe.log_error(tb, f"RetryMigration-{doc_name} Disb[{loan_no}]")
+                _log(
+                    f"   ❌ Disbursement FAILED {loan_no}:\n      {tb.splitlines()[-1]}"
+                )
+                errors += 1
+
+            # ── Repayments ─────────────────────────────────────────────────────
+            loan_cache_row = frappe.db.get_value(
+                "Loan",
+                loan.name,
+                (
+                    "name, applicant_type, applicant, company, branch, loan_product, "
+                    "is_term_loan, loan_account, payment_account, "
+                    "total_payment, debit_adjustment_amount, credit_adjustment_amount, "
+                    "total_principal_paid, total_interest_payable, written_off_amount, "
+                    "refund_amount, disbursed_amount, loan_amount, status"
+                ),
+                as_dict=True,
+            )
+            created, errs = _create_repayments_for_loan(
+                loan.name, loan_no, loan_cache_row
+            )
+            repayments_created += created
+            errors += errs
+            _log(f"   ↳ {loan_no}: {created} repayments created")
+
+    else:
+        _log("\n── Pass 1: no missing loans — skipped ──")
+        missing_loan_nos = []
+
+    _log(
+        f"\n── Pass 2: checking repayments for {len(existing_rows):,} existing loans ──"
+    )
+    pass2_loans_checked = pass2_reps_created = pass2_errors = 0
+
+    existing_loan_names = list(
+        {
+            existing_map[str(r.get("Loan#") or r.get("Loan #") or "").strip()]
+            for r in existing_rows
+            if str(r.get("Loan#") or r.get("Loan #") or "").strip() in existing_map
+        }
+    )
+
+    _LOAN_FIELDS = (
+        "name, applicant_type, applicant, company, branch, loan_product, "
+        "is_term_loan, loan_account, payment_account, "
+        "total_payment, debit_adjustment_amount, credit_adjustment_amount, "
+        "total_principal_paid, total_interest_payable, written_off_amount, "
+        "refund_amount, disbursed_amount, loan_amount, status"
+    )
+    loan_cache = {}
+    CHUNK = 500
+    for i in range(0, len(existing_loan_names), CHUNK):
+        chunk = existing_loan_names[i : i + CHUNK]
+        rows_db = frappe.db.sql(
+            f"SELECT {_LOAN_FIELDS} FROM `tabLoan` "
+            f"WHERE name IN ({','.join(['%s'] * len(chunk))})",
+            tuple(chunk),
+            as_dict=True,
+        )
+        for lr in rows_db:
+            loan_cache[lr.name] = lr
+
+    for r in existing_rows:
+        loan_no = str(r.get("Loan#") or r.get("Loan #") or "").strip()
+        loan_name = existing_map.get(loan_no)
+        if not loan_name:
+            continue
+
+        loan_cache_row = loan_cache.get(loan_name)
+        if not loan_cache_row:
+            continue
+
+        excel_count = len(rep_by_loan.get(loan_no, []))
+        if not excel_count:
+            continue
+
+        created, errs = _create_repayments_for_loan(loan_name, loan_no, loan_cache_row)
+        pass2_loans_checked += 1
+        pass2_reps_created += created
+        pass2_errors += errs
+
+        if created:
+            _log(
+                f"   ✅ {loan_no} ({loan_name}): {created} missing repayment(s) created"
+            )
+
+    repayments_created += pass2_reps_created
+    errors += pass2_errors
+
+    _log(
+        f"   Pass 2 summary: {pass2_loans_checked:,} loans checked, "
+        f"{pass2_reps_created:,} repayments created, {pass2_errors} errors"
+    )
+
+    all_touched_loan_nos = set(new_loan_map.keys())
+    for r in existing_rows:
+        ln = str(r.get("Loan#") or r.get("Loan #") or "").strip()
+        if ln in existing_map:
+            all_touched_loan_nos.add(ln)
+
+    full_map = {**existing_map, **new_loan_map}
+
+    if all_touched_loan_nos:
+        _log("\n   Running force-close on all touched loans...")
+        source_status_map = {
+            str(r.get("Loan#") or r.get("Loan #") or "").strip(): str(
+                r.get("Status") or ""
+            ).strip()
+            for r in disbursement_rows
+            if r.get("Loan#") or r.get("Loan #")
+        }
+        _force_close_fully_paid_loans(
+            doc,
+            all_touched_loan_nos,
+            full_map,
+            source_status_map,
+        )
+
+    # ── Final summary ─────────────────────────────────────────────────────────
+    _log(f"\n[{now_datetime()}] ── create_failed_loans_entries complete ──")
+    _log(f"   Loans created:      {loans_created:,}")
+    _log(f"   Disbursements:      {disb_created:,}")
+    _log(f"   Repayments created: {repayments_created:,}")
+    _log(f"   Errors:             {errors}")
+
+    # Update counters on the migration doc
+    frappe.db.set_value(
+        "Data Migration Tool",
+        doc_name,
+        {
+            "loans_created": (
+                (
+                    frappe.db.get_value(
+                        "Data Migration Tool", doc_name, "loans_created"
+                    )
+                    or 0
+                )
+                + loans_created
+            ),
+            "repayments_created": (
+                (
+                    frappe.db.get_value(
+                        "Data Migration Tool", doc_name, "repayments_created"
+                    )
+                    or 0
+                )
+                + repayments_created
+            ),
+            "errors_count": max(
+                0,
+                (
+                    frappe.db.get_value("Data Migration Tool", doc_name, "errors_count")
+                    or 0
+                )
+                - loans_created,
+            ),
+        },
+        update_modified=False,
+    )
+    _flush_log(doc, lines)
+    frappe.db.commit()
+
+    return {
+        "missing_loans": missing_loan_nos,
+        "loans_created": loans_created,
+        "disb_created": disb_created,
+        "repayments_created": repayments_created,
+        "loans_skipped": loans_skipped,
+        "errors": errors,
+        "log": "\n".join(lines),
+    }
+
+
+def _flush_log(doc, lines):
+    existing = (
+        frappe.db.get_value("Data Migration Tool", doc.name, "migration_log") or ""
+    )
+    frappe.db.set_value(
+        "Data Migration Tool",
+        doc.name,
+        "migration_log",
+        existing + "\n".join(lines) + "\n",
+        update_modified=False,
+    )
+    frappe.db.commit()

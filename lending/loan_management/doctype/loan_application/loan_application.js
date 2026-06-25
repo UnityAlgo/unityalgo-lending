@@ -22,19 +22,19 @@ frappe.ui.form.on('Loan Application', {
 			return;
 		}
 
-		// frappe.validated = false;
-		// navigator.geolocation.getCurrentPosition(
-		// 	(position) => {
-		// 		frm.set_value("latitude", position.coords.latitude);
-		// 		frm.set_value("longitude", position.coords.longitude);
-		// 		frm.save();
-		// 	},
-		// 	() => {
-		// 		frappe.throw(__(
-		// 			"Could not fetch geolocation. Please allow location access and save the document again."
-		// 		));
-		// 	}
-		// );
+		frappe.validated = false;
+		navigator.geolocation.getCurrentPosition(
+			(position) => {
+				frm.set_value("latitude", position.coords.latitude);
+				frm.set_value("longitude", position.coords.longitude);
+				frm.save();
+			},
+			() => {
+				frappe.throw(__(
+					"Could not fetch geolocation. Please allow location access and save the document again."
+				));
+			}
+		);
 	},
 	setup: function (frm) {
 

@@ -63,6 +63,8 @@ class LoanInterestAccrual(AccountsController):
             ],
             as_dict=1,
         )
+        if not account_details:
+            return
 
         if self.is_npa:
             receivable_account = account_details.suspense_interest_receivable
@@ -282,71 +284,53 @@ def make_accrual_interest_entry_for_term_loans(
     loan_product=None,
     accrual_type="Regular",
 ):
-    """Create interest accrual LIAs for term loan schedule rows that are due.
-
-    FIX: Before creating an LIA, check what has already been accrued for each
-    schedule row's due_date (from JIT accruals created by partial payments).
-    Only accrue the REMAINING amount, not the full schedule amount.
-
-    Example:
-      Schedule Row 1: Interest 1,066.67 + Principal 7,610.92
-      Partial payment already created JIT LIA: Interest 1,066.67 + Principal 3,933.33
-      This function should create: Interest 0 + Principal 3,677.59 (the remainder)
-      NOT: Interest 1,066.67 + Principal 7,610.92 (which would double-count)
-    """
     curr_date = posting_date or add_days(nowdate(), 1)
     precision = cint(frappe.db.get_default("currency_precision")) or 2
 
     term_loans = get_term_loans(curr_date, term_loan, loan_product)
+    if not term_loans:
+        return
+
+    loan_names = list({i.name for i in term_loans})
+    due_dates = list({str(i.payment_date) for i in term_loans})
+
+    bulk = frappe.db.sql(
+        """
+        SELECT loan, DATE(due_date) as due_date,
+               SUM(interest_amount)          as accrued_int,
+               SUM(payable_principal_amount) as accrued_prin
+        FROM `tabLoan Interest Accrual`
+        WHERE loan IN %(loans)s
+          AND DATE(due_date) IN %(dates)s
+          AND docstatus = 1
+        GROUP BY loan, DATE(due_date)
+    """,
+        {"loans": loan_names, "dates": due_dates},
+        as_dict=True,
+    )
+
+    accrued_map = {
+        (r.loan, str(r.due_date)): (
+            flt(r.accrued_int or 0, precision),
+            flt(r.accrued_prin or 0, precision),
+        )
+        for r in bulk
+    }
+
     accrued_entries = []
 
     for loan in term_loans:
-        # =============================================================
-        # FIX: Check what's already been accrued for this due_date
-        # (from JIT accruals created by book_unaccrued_interest during
-        # partial payments before the schedule date arrived)
-        # =============================================================
-        already_accrued_int = flt(
-            frappe.db.get_value(
-                "Loan Interest Accrual",
-                {
-                    "loan": loan.name,
-                    "due_date": loan.payment_date,
-                    "docstatus": 1,
-                },
-                "sum(interest_amount)",
-            )
-            or 0,
-            precision,
+        key = (loan.name, str(loan.payment_date))
+        already_accrued_int, already_accrued_prin = accrued_map.get(key, (0.0, 0.0))
+
+        remaining_int = max(
+            flt(loan.interest_amount - already_accrued_int, precision), 0
+        )
+        remaining_prin = max(
+            flt(loan.principal_amount - already_accrued_prin, precision), 0
         )
 
-        already_accrued_prin = flt(
-            frappe.db.get_value(
-                "Loan Interest Accrual",
-                {
-                    "loan": loan.name,
-                    "due_date": loan.payment_date,
-                    "docstatus": 1,
-                },
-                "sum(payable_principal_amount)",
-            )
-            or 0,
-            precision,
-        )
-
-        # Calculate remaining unaccrued amounts
-        remaining_int = flt(loan.interest_amount - already_accrued_int, precision)
-        remaining_prin = flt(loan.principal_amount - already_accrued_prin, precision)
-
-        # Don't go negative (in case of overpayment/over-accrual)
-        if remaining_int < 0:
-            remaining_int = 0
-        if remaining_prin < 0:
-            remaining_prin = 0
-
-        # Skip if nothing left to accrue
         if remaining_int <= 0 and remaining_prin <= 0:
-            # Still mark as accrued since the full amount has been covered
             accrued_entries.append(loan.payment_entry)
             continue
 
@@ -374,7 +358,7 @@ def make_accrual_interest_entry_for_term_loans(
     if accrued_entries:
         frappe.db.sql(
             """UPDATE `tabRepayment Schedule`
-            SET is_accrued = 1 where name in (%s)"""  # nosec
+               SET is_accrued = 1 WHERE name IN (%s)"""
             % ", ".join(["%s"] * len(accrued_entries)),
             tuple(accrued_entries),
         )

@@ -1,6 +1,6 @@
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, formatdate, cint
+from frappe.utils import flt, getdate, cint
 
 
 def execute(filters=None):
@@ -358,18 +358,20 @@ def get_customer_loan_data(customer, loan_filter=None):
                     "interest_amount": flt(loan.total_interest_payable, precision),
                     "non_deductable_fees": non_deductable_fees,
                     "penalty_amount": flt(total_penalty, precision),
+                    "branch": loan.get("branch"),
                     "total_due": flt(total_due, precision),
                     "paid_amount": flt(loan.total_amount_paid, precision),
                     "balance_amount": balance_amount,
                     "status": loan.status,
+                    "repayment_status": loan.repayment_status,
                     "is_closed": is_closed,
                     "closure_date": closure_date,
                 },
                 "customer_details": {
                     "name": customer_doc.customer_name,
-                    "mobile": customer_doc.get("mobile_no") or "",
-                    "cnic": customer_doc.get("custom_cnic") or "",
-                    "address": customer_doc.get("primary_address") or "",
+                    "branch": customer_doc.get("branch"),
+                    "mobile": customer_doc.get("custom_phone_no_1") or "",
+                    "cnic": customer_doc.get("custom_cnic_no") or "",
                 },
                 "company_info": {
                     "name": company_doc.company_name,

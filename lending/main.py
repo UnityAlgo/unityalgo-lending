@@ -148,7 +148,7 @@ def update_loan_repayment_statuses():
     if not updates:
         return
 
-    chunk_size = 500
+    chunk_size = 150
     updated = 0
     for i in range(0, len(updates), chunk_size):
         batch = updates[i : i + chunk_size]

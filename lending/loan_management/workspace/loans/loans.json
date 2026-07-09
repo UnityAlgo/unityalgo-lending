@@ -129,7 +129,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Reports",
-   "link_count": 13,
+   "link_count": 14,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
@@ -264,9 +264,19 @@
    "link_type": "Report",
    "onboard": 0,
    "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Loan Details",
+   "link_count": 0,
+   "link_to": "Loan Details Report",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
   }
  ],
- "modified": "2026-06-12 19:03:28.966727",
+ "modified": "2026-07-01 16:31:53.112333",
  "modified_by": "Administrator",
  "module": "Loan Management",
  "name": "Loans",

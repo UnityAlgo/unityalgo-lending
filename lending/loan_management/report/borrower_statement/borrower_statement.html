@@ -138,6 +138,8 @@ for (var li = 0; li < (loans_data || []).length; li++) { var loan=loans_data[li]
   <div style="display:flex;justify-content:space-between;border:2px solid #222;padding:0.5rem;margin:10px 0;">
     <div>
       <div><b>{%= __("Customer") %}:</b> {%= cd.name %}</div>
+      <div><b>{%= __("Branch") %}:</b> {%= cd.branch %}</div>
+
       {% if (cd.cnic) { %}<div><b>{%= __("CNIC") %}:</b> {%= cd.cnic %}</div>{% } %}
       {% if (cd.mobile) { %}<div><b>{%= __("Mobile") %}:</b> {%= cd.mobile %}</div>{% } %}
       {% if (cd.address) { %}<div>{%= cd.address %}</div>{% } %}
@@ -145,7 +147,7 @@ for (var li = 0; li < (loans_data || []).length; li++) { var loan=loans_data[li]
     <div style="text-align:right;">
       <div><b>{%= __("Date") %}:</b> {%= fmtDate(ci.date) %}</div>
       <div><b>{%= __("Loan #") %}:</b> {%= ld.name %}</div>
-      <div><b>{%= __("Status") %}:</b> {%= ld.status || "Disbursed" %}</div>
+      <div><b>{%= __("Status") %}:</b> {%= ld.repayment_status || "Disbursed" %}</div>
     </div>
   </div>
 
@@ -180,7 +182,7 @@ for (var li = 0; li < (loans_data || []).length; li++) { var loan=loans_data[li]
     <tr>
       <td class="lbl">{%= __("Repayment Cycle") %}</td>
       <td class="val">{%= ld.repayment_cycle || "Monthly" %}</td>
-      <td class="lbl">{%= __("Total Due Amount") %}</td>
+      <td class="lbl">{%= __("Total Payable") %}</td>
       <td class="val">{%= fmtMoney(ld.total_due) %}</td>
     </tr>
     <tr>

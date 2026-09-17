@@ -10,6 +10,9 @@ from erpnext.setup.doctype.employee.test_employee import make_employee
 from lending.loan_management.doctype.loan.test_loan import (
 	create_loan_accounts,
 	create_loan_product,
+	create_test_bank,
+	create_test_branch,
+	create_test_sales_person,
 	set_loan_settings_in_company,
 )
 
@@ -32,6 +35,8 @@ class TestLoanApplication(unittest.TestCase):
 			"Loan Account - _TC",
 			"Interest Income Account - _TC",
 			"Penalty Income Account - _TC",
+			repayment_method="Repay Over Number of Periods",
+			repayment_periods=18,
 			repayment_schedule_type="Monthly as per repayment start date",
 		)
 		self.applicant = make_employee("kate_loan@loan.com", "_Test Company")
@@ -48,6 +53,10 @@ class TestLoanApplication(unittest.TestCase):
 				"repayment_method": "Repay Over Number of Periods",
 				"repayment_periods": 18,
 				"company": "_Test Company",
+				"branch": create_test_branch(),
+				"sales_person": create_test_sales_person(),
+				"bank_name": create_test_bank(),
+				"loan_utilization": "Small Business",
 			}
 		)
 		loan_application.insert()

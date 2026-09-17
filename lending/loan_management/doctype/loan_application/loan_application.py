@@ -233,6 +233,7 @@ class LoanApplication(Document):
 
             self.calculate_payable_amount()
         else:
+            self.total_payable_interest = 0
             self.total_payable_amount = self.loan_amount
 
     def calculate_payable_amount(self):

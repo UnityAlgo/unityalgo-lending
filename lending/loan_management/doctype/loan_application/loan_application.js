@@ -102,6 +102,9 @@ frappe.ui.form.on('Loan Application', {
 		const { loan_product } = frm.doc;
 		if (loan_product) {
 			frappe.db.get_doc("Loan Product", loan_product).then(doc => {
+				if (!frm.doc.loan_amount) {
+					frm.set_value("loan_amount", doc.maximum_loan_amount);
+				}
 				frm.set_value("repayment_method", doc.repayment_method);
 				frm.set_value("repayment_amount", doc.repayment_amount);
 				frm.set_value("repayment_periods", doc.repayment_periods);

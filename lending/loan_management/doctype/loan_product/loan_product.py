@@ -57,6 +57,8 @@ class LoanProduct(Document):
                     / (math.log(1 + monthly_interest_rate))
                 )
             else:
+                if not self.repayment_amount:
+                    frappe.throw(_("Repayment Amount is mandatory for repayment method 'Repay Fixed Amount per Period'"))
                 self.repayment_periods = loan_amount / self.repayment_amount
 
         total_payable_interest = 0.0

@@ -127,7 +127,6 @@
   },
   {
    "default": "0",
-   "fetch_from": "loan_product.maximum_loan_amount",
    "fieldname": "loan_amount",
    "fieldtype": "Currency",
    "in_list_view": 1,

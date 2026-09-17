@@ -149,6 +149,7 @@ class LoanRestructure(AccountsController):
 		return self.completed_tenure
 
 	def add_restructure_charges(self):
+		precision = cint(frappe.db.get_default("currency_precision")) or 2
 		self.restructure_charges = 0
 
 		for charge in frappe.get_all(
@@ -163,9 +164,10 @@ class LoanRestructure(AccountsController):
 
 			self.restructure_charges += amount
 
-		self.restructure_charges = flt(self.restructure_charges, 2)
+		self.restructure_charges = flt(self.restructure_charges, precision)
 
 	def calculate_new_loan_amount(self):
+		precision = cint(frappe.db.get_default("currency_precision")) or 2
 		self.new_loan_amount = flt(self.pending_principal_amount) - flt(self.principal_adjusted)
 
 		if self.treatment_of_normal_interest == "Capitalize":
@@ -180,7 +182,7 @@ class LoanRestructure(AccountsController):
 		if self.treatment_of_other_charges == "Capitalize":
 			self.new_loan_amount += flt(self.balance_charges)
 
-		self.new_loan_amount = flt(self.new_loan_amount, 2)
+		self.new_loan_amount = flt(self.new_loan_amount, precision)
 
 	def adjust_component(self, amount_to_adjust, component, update_field):
 		if amount_to_adjust > 0:
@@ -449,7 +451,7 @@ class LoanRestructure(AccountsController):
 				frappe.throw(
 					_("Normal branch limit for branch {0} exceeded by {1}").format(
 						frappe.bold(self.branch),
-						frappe.bold(flt(self.pending_principal_amount - available_limit, 2)),
+						frappe.bold(flt(self.pending_principal_amount - available_limit, precision)),
 					)
 				)
 
@@ -461,7 +463,7 @@ class LoanRestructure(AccountsController):
 				frappe.throw(
 					_("Delinquent branch limit for branch {0} exceeded by {1}").format(
 						frappe.bold(self.branch),
-						frappe.bold(flt(self.pending_principal_amount - delinquent_available_limit, 2)),
+						frappe.bold(flt(self.pending_principal_amount - delinquent_available_limit, precision)),
 					)
 				)
 

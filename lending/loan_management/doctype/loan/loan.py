@@ -31,16 +31,16 @@ class Loan(AccountsController):
     def set_repayment_start_date(self):
         from dateutil.relativedelta import relativedelta
 
-        if self.posting_date:
+        if self.posting_date and not self.repayment_start_date:
             self.repayment_start_date = getdate(self.posting_date) + relativedelta(
                 months=1
             )
 
     def validate(self):
         self.set_repayment_start_date()
+        self.set_loan_amount()
         self.set_missing_fields()
         self.update_repayment_schedule()
-        self.set_loan_amount()
         self.validate_loan_amount()
         self.validate_loan_product()
         self.validate_employee()
@@ -1268,6 +1268,9 @@ def move_unpaid_interest_to_suspense_ledger(
 
     for accrual in pending_loan_interest_accruals:
         amount = accrual.interest_amount - accrual.paid_interest_amount
+
+        if not amount:
+            continue
 
         if reverse:
             amount = -1 * amount

@@ -1413,6 +1413,8 @@ class LoanRepayment(AccountsController):
                         + self.against_loan,
                         "cost_center": self.cost_center,
                         "branch": branch,
+                        "party_type": self.applicant_type,
+                        "party": self.applicant,
                         "posting_date": getdate(self.posting_date),
                     },
                     item=self,
@@ -1452,6 +1454,8 @@ class LoanRepayment(AccountsController):
                             "remarks": _(remarks),
                             "cost_center": self.cost_center,
                             "branch": branch,
+                            "party_type": self.applicant_type,
+                            "party": self.applicant,
                             "posting_date": getdate(self.posting_date),
                         },
                         item=self,
@@ -1470,6 +1474,8 @@ class LoanRepayment(AccountsController):
                                 "against_voucher": self.against_loan,
                                 "cost_center": self.cost_center,
                                 "branch": branch,
+                                "party_type": self.applicant_type,
+                                "party": self.applicant,
                                 "posting_date": getdate(self.posting_date),
                             },
                             item=self,
@@ -1487,6 +1493,8 @@ class LoanRepayment(AccountsController):
                                 "against_voucher": self.against_loan,
                                 "cost_center": self.cost_center,
                                 "branch": branch,
+                                "party_type": self.applicant_type,
+                                "party": self.applicant,
                                 "posting_date": getdate(self.posting_date),
                             },
                             item=self,
@@ -1554,6 +1562,8 @@ class LoanRepayment(AccountsController):
                             "remarks": _(remarks),
                             "cost_center": self.cost_center,
                             "branch": branch,
+                            "party_type": self.applicant_type,
+                            "party": self.applicant,
                             "posting_date": getdate(self.posting_date),
                         },
                         item=self,
@@ -1616,6 +1626,8 @@ class LoanRepayment(AccountsController):
                         "remarks": _(remarks),
                         "cost_center": self.cost_center,
                         "branch": branch,
+                        "party_type": self.applicant_type,
+                        "party": self.applicant,
                         "posting_date": getdate(self.posting_date),
                     },
                     item=self,
@@ -2056,7 +2068,7 @@ def get_amounts(amounts, against_loan, posting_date, with_loan_details=False):
                 and not getattr(against_loan_doc, "repay_from_salary", False)
             ):
                 penalty_amount += (
-                    flt(pending_principal_amount, precision)
+                    flt(entry.interest_amount, precision)
                     * (loan_product_details.penalty_interest_rate / 100)
                     * no_of_late_days
                 ) / 365

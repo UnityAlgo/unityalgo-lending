@@ -63,6 +63,8 @@ class TestLoan(unittest.TestCase):
 				loan_product[0],
 				loan_product[1],
 				loan_product[2],
+				repayment_method="Repay Over Number of Periods",
+				repayment_periods=12,
 				repayment_schedule_type=loan_product[3],
 			)
 
@@ -72,6 +74,8 @@ class TestLoan(unittest.TestCase):
 				loan_product[0],
 				loan_product[1],
 				loan_product[2],
+				repayment_method="Repay Over Number of Periods",
+				repayment_periods=12,
 				repayment_schedule_type=loan_product[3],
 				repayment_date_on=loan_product[4],
 			)
@@ -90,6 +94,8 @@ class TestLoan(unittest.TestCase):
 			"Loan Account - _TC",
 			"Interest Income Account - _TC",
 			"Penalty Income Account - _TC",
+			repayment_method="Repay Over Number of Periods",
+			repayment_periods=12,
 			repayment_schedule_type="Monthly as per repayment start date",
 		)
 
@@ -120,11 +126,8 @@ class TestLoan(unittest.TestCase):
 		)
 
 		self.applicant1 = make_employee("robert_loan@loan.com")
-		if not frappe.db.exists("Customer", "_Test Loan Customer"):
-			frappe.get_doc(get_customer_dict("_Test Loan Customer")).insert(ignore_permissions=True)
-
-		if not frappe.db.exists("Customer", "_Test Loan Customer 1"):
-			frappe.get_doc(get_customer_dict("_Test Loan Customer 1")).insert(ignore_permissions=True)
+		create_loan_customer("_Test Loan Customer")
+		create_loan_customer("_Test Loan Customer 1")
 
 		self.applicant2 = frappe.db.get_value("Customer", {"name": "_Test Loan Customer"}, "name")
 		self.applicant3 = frappe.db.get_value("Customer", {"name": "_Test Loan Customer 1"}, "name")
@@ -162,6 +165,32 @@ class TestLoan(unittest.TestCase):
 		self.assertEqual(len(loan_repayment_schedule.repayment_schedule), 22)
 		self.assertEqual(flt(loan.total_interest_payable, 0), 22712)
 		self.assertEqual(flt(loan.total_payment, 0), 302712)
+
+	def test_repayment_start_date_is_not_overwritten_on_resave(self):
+		# Regression: set_repayment_start_date() used to unconditionally recompute
+		# repayment_start_date as posting_date + 1 month on every validate(), even
+		# though the field is a normal editable Date field and callers (or users)
+		# may set it explicitly. This silently discarded any explicit value on
+		# every save, which threw off due-date-derived calculations like DPD.
+		explicit_repayment_start_date = "2023-01-31"
+		loan = create_loan(
+			self.applicant2,
+			"Personal Loan",
+			280000,
+			"Repay Over Number of Periods",
+			20,
+			applicant_type="Customer",
+			posting_date="2023-01-01",
+			repayment_start_date=explicit_repayment_start_date,
+		)
+
+		self.assertEqual(str(loan.repayment_start_date), explicit_repayment_start_date)
+
+		# Re-saving (e.g. any subsequent validate() call) must not clobber it.
+		loan.save()
+		loan.reload()
+
+		self.assertEqual(str(loan.repayment_start_date), explicit_repayment_start_date)
 
 	def test_loan_with_security(self):
 		pledge = [
@@ -1034,6 +1063,20 @@ def create_account(account_name, parent_account, root_type, account_type, report
 		).insert(ignore_permissions=True)
 
 
+def create_loan_customer(customer_name):
+	"""Create a test Customer, satisfying the site's mandatory gender /
+	custom_phone_no_1 Customer fields (added by the Loan Management module)
+	that erpnext's own get_customer_dict fixture does not populate."""
+	if frappe.db.exists("Customer", customer_name):
+		return customer_name
+
+	customer = get_customer_dict(customer_name)
+	customer["gender"] = "Other"
+	customer["custom_phone_no_1"] = "9999999999"
+	frappe.get_doc(customer).insert(ignore_permissions=True)
+	return customer_name
+
+
 def create_loan_product(
 	product_code,
 	product_name,
@@ -1220,6 +1263,30 @@ def create_repayment_entry(loan, applicant, posting_date, paid_amount, offset_ba
 	return lr
 
 
+def create_test_branch():
+	if not frappe.db.exists("Branch", "_Test Branch"):
+		frappe.get_doc({"doctype": "Branch", "branch": "_Test Branch"}).insert(ignore_permissions=True)
+	return "_Test Branch"
+
+
+def create_test_bank():
+	if not frappe.db.exists("Bank", "_Test Bank"):
+		frappe.get_doc({"doctype": "Bank", "bank_name": "_Test Bank"}).insert(ignore_permissions=True)
+	return "_Test Bank"
+
+
+def create_test_sales_person():
+	if not frappe.db.exists("Sales Person", "_Test Sales Person"):
+		frappe.get_doc(
+			{
+				"doctype": "Sales Person",
+				"sales_person_name": "_Test Sales Person",
+				"is_group": 0,
+			}
+		).insert(ignore_permissions=True)
+	return "_Test Sales Person"
+
+
 def create_loan_application(
 	company,
 	applicant,
@@ -1237,6 +1304,10 @@ def create_loan_application(
 	loan_application.loan_product = loan_product
 	loan_application.posting_date = posting_date or nowdate()
 	loan_application.is_secured_loan = 1
+	loan_application.branch = create_test_branch()
+	loan_application.sales_person = create_test_sales_person()
+	loan_application.bank_name = create_test_bank()
+	loan_application.loan_utilization = "Small Business"
 
 	if repayment_method:
 		loan_application.repayment_method = repayment_method
@@ -1280,6 +1351,8 @@ def create_loan(
 			"repayment_periods": repayment_periods,
 			"repayment_start_date": repayment_start_date or nowdate(),
 			"posting_date": posting_date or nowdate(),
+			"branch": create_test_branch(),
+			"sales_person": create_test_sales_person(),
 		}
 	)
 
@@ -1315,6 +1388,8 @@ def create_loan_with_security(
 			"loan_account": "Loan Account - _TC",
 			"interest_income_account": "Interest Income Account - _TC",
 			"penalty_income_account": "Penalty Income Account - _TC",
+			"branch": create_test_branch(),
+			"sales_person": create_test_sales_person(),
 		}
 	)
 
@@ -1341,6 +1416,8 @@ def create_demand_loan(applicant, loan_product, loan_application, posting_date=N
 			"loan_account": "Loan Account - _TC",
 			"interest_income_account": "Interest Income Account - _TC",
 			"penalty_income_account": "Penalty Income Account - _TC",
+			"branch": create_test_branch(),
+			"sales_person": create_test_sales_person(),
 		}
 	)
 

@@ -3,13 +3,12 @@ import unittest
 import frappe
 from frappe.utils import add_to_date, date_diff, flt, get_datetime, get_first_day, nowdate
 
-from erpnext.selling.doctype.customer.test_customer import get_customer_dict
-
 from lending.loan_management.doctype.loan.test_loan import (
 	create_demand_loan,
 	create_loan,
 	create_loan_accounts,
 	create_loan_application,
+	create_loan_customer,
 	create_loan_product,
 	create_loan_security,
 	create_loan_security_price,
@@ -79,8 +78,7 @@ class TestLoanInterestAccrual(unittest.TestCase):
 			"Test Security 1", 500, "Nos", get_datetime(), get_datetime(add_to_date(nowdate(), hours=24))
 		)
 
-		if not frappe.db.exists("Customer", "_Test Loan Customer"):
-			frappe.get_doc(get_customer_dict("_Test Loan Customer")).insert(ignore_permissions=True)
+		create_loan_customer("_Test Loan Customer")
 
 		self.applicant = frappe.db.get_value("Customer", {"name": "_Test Loan Customer"}, "name")
 

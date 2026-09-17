@@ -4,7 +4,7 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, today
+from frappe.utils import cint, flt, today
 
 
 PAR_BUCKETS = [
@@ -364,6 +364,7 @@ def _aggregate_into_buckets(enriched):
         total_portfolio_principal += loan["outstanding_principal"]
 
     # Build output rows
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
     data = []
     gt_count = 0
     gt_principal = 0.0
@@ -374,11 +375,11 @@ def _aggregate_into_buckets(enriched):
     for label, lo, hi, rate in PAR_BUCKETS:
         b = buckets[label]
 
-        op = round(b["outstanding_principal"], 2)
-        oi = round(b["outstanding_interest"], 2)
-        ope = round(b["outstanding_penalty"], 2)
-        tot = round(op + oi + ope, 2)
-        prov = round(op * rate, 2)
+        op = round(b["outstanding_principal"], precision)
+        oi = round(b["outstanding_interest"], precision)
+        ope = round(b["outstanding_penalty"], precision)
+        tot = round(op + oi + ope, precision)
+        prov = round(op * rate, precision)
         pct = (
             round((op / total_portfolio_principal * 100), 2)
             if total_portfolio_principal
@@ -409,18 +410,18 @@ def _aggregate_into_buckets(enriched):
         gt_provision += prov
 
     # Grand Total row
-    gt_total = round(gt_principal + gt_interest + gt_penalty, 2)
+    gt_total = round(gt_principal + gt_interest + gt_penalty, precision)
     data.append(
         {
             "category": "Grand Total",
             "dpd_range": "",
             "loan_count": gt_count,
-            "outstanding_principal": round(gt_principal, 2),
-            "outstanding_interest": round(gt_interest, 2),
-            "outstanding_penalty": round(gt_penalty, 2),
+            "outstanding_principal": round(gt_principal, precision),
+            "outstanding_interest": round(gt_interest, precision),
+            "outstanding_penalty": round(gt_penalty, precision),
             "total_exposure": gt_total,
             "provision_rate": None,
-            "provision_amount": round(gt_provision, 2),
+            "provision_amount": round(gt_provision, precision),
             "pct_portfolio": 100.0 if total_portfolio_principal else 0.0,
             "bold": 1,
             "indent": 0,

@@ -17,9 +17,18 @@ class LoanProduct(Document):
         self.set_missing_values()
 
     def set_repayment_details(self):
-        loan_amount = flt(self.maximum_loan_amount, 2)
-        balance_amount = loan_amount
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
+        loan_amount = flt(self.maximum_loan_amount, precision)
         self.total_payable_interest = 0
+
+        if not self.is_term_loan:
+            # Demand Loans have no fixed amortization schedule: interest
+            # accrues on the outstanding balance and is repaid ad hoc, so
+            # the term-loan amortization math below does not apply.
+            self.total_payable_amount = loan_amount
+            return
+
+        balance_amount = loan_amount
 
         if self.repayment_method == "Repay Over Number of Periods":
             self.repayment_amount = get_monthly_repayment_amount(
@@ -36,7 +45,7 @@ class LoanProduct(Document):
                     frappe.throw(
                         _(
                             "Repayment Amount must be greater than "
-                            + str(flt(min_repayment_amount, 2))
+                            + str(flt(min_repayment_amount, precision))
                         )
                     )
 
@@ -61,8 +70,8 @@ class LoanProduct(Document):
 
             total_payable_interest += interest_amount
 
-        self.total_payable_interest = flt(total_payable_interest, 2)
-        self.total_payable_amount = flt(loan_amount + total_payable_interest, 2)
+        self.total_payable_interest = flt(total_payable_interest, precision)
+        self.total_payable_amount = flt(loan_amount + total_payable_interest, precision)
 
     def validate(self):
         self.validate_accounts()

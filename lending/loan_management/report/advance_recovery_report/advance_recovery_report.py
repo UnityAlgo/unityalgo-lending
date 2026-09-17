@@ -635,6 +635,7 @@ def _get_lia_stats(filters):
         as_dict=True,
     )
 
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
     row = lia[0] if lia else {}
     int_accrued = flt(row.get("interest_accrued"))
     int_collected = flt(row.get("interest_collected"))
@@ -648,9 +649,9 @@ def _get_lia_stats(filters):
         "principal_collected": flt(row.get("principal_collected")),
         "penalty_accrued": pen_accrued,
         "penalty_collected": pen_collected,
-        "uncollected_interest": round(int_accrued - int_collected, 2),
-        "uncollected_penalty": round(pen_accrued - pen_collected, 2),
-        "monthly_target": round(int_accrued + pen_accrued, 2),
+        "uncollected_interest": round(int_accrued - int_collected, precision),
+        "uncollected_penalty": round(pen_accrued - pen_collected, precision),
+        "monthly_target": round(int_accrued + pen_accrued, precision),
         "collection_efficiency": round(int_collected / int_accrued * 100, 1)
         if int_accrued
         else 0.0,
@@ -693,6 +694,7 @@ def _get_advance_rows(filters):
         as_dict=True,
     )
 
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
     total_advance = 0.0
     advance_rows = []
     for row in rows:
@@ -702,11 +704,11 @@ def _get_advance_rows(filters):
         if excess > 0:
             total_advance += excess
             row["installment"] = inst
-            row["excess_paid"] = round(excess, 2)
+            row["excess_paid"] = round(excess, precision)
             row["excess_ratio"] = round(paid / inst, 2) if inst > 0 else 0.0
             advance_rows.append(row)
 
-    return round(total_advance, 2), advance_rows
+    return round(total_advance, precision), advance_rows
 
 
 # ── Report type: Summary ──────────────────────────────────────────────────────
@@ -994,6 +996,7 @@ def get_monthwise_advance(filters):
             if excess > months[mk]["largest_advance"]:
                 months[mk]["largest_advance"] = excess
 
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
     result = []
     for mk in sorted(months.keys()):
         m = months[mk]
@@ -1002,13 +1005,13 @@ def get_monthwise_advance(filters):
             {
                 "month_label": m["month_label"],
                 "client_count": count,
-                "total_advance": round(m["total_advance"], 2),
-                "avg_excess": round(m["total_advance"] / count, 2) if count else 0.0,
-                "largest_advance": round(m["largest_advance"], 2),
-                "total_repaid": round(m["total_repaid"], 2),
-                "interest_accrued": round(m["interest_accrued"], 2),
-                "penalty_accrued": round(m["penalty_accrued"], 2),
-                "uncollected_interest": round(m["uncollected_interest"], 2),
+                "total_advance": round(m["total_advance"], precision),
+                "avg_excess": round(m["total_advance"] / count, precision) if count else 0.0,
+                "largest_advance": round(m["largest_advance"], precision),
+                "total_repaid": round(m["total_repaid"], precision),
+                "interest_accrued": round(m["interest_accrued"], precision),
+                "penalty_accrued": round(m["penalty_accrued"], precision),
+                "uncollected_interest": round(m["uncollected_interest"], precision),
             }
         )
     return result
@@ -1070,6 +1073,7 @@ def get_accrual_vs_collection(filters):
         as_dict=True,
     )
 
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
     result = []
     for row in rows:
         int_acc = flt(row.interest_accrued)
@@ -1085,10 +1089,10 @@ def get_accrual_vs_collection(filters):
                 "repayment_status": row.repayment_status,
                 "interest_accrued": int_acc,
                 "interest_collected": int_col,
-                "uncollected_interest": round(int_acc - int_col, 2),
+                "uncollected_interest": round(int_acc - int_col, precision),
                 "penalty_accrued": pen_acc,
                 "penalty_collected": pen_col,
-                "uncollected_penalty": round(pen_acc - pen_col, 2),
+                "uncollected_penalty": round(pen_acc - pen_col, precision),
                 "principal_accrued": flt(row.principal_accrued),
                 "principal_collected": flt(row.principal_collected),
                 "collection_efficiency": round(int_col / int_acc * 100, 1)
@@ -1105,6 +1109,8 @@ def get_accrual_vs_collection(filters):
 def get_chart(filters, data):
     report_type = filters.get("report_type") or "Summary"
 
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
+
     if report_type == "Summary":
         stats = _get_portfolio_stats(filters)
         lia = _get_lia_stats(filters)
@@ -1115,17 +1121,17 @@ def get_chart(filters, data):
                     {
                         "name": "Accrued",
                         "values": [
-                            round(lia["interest_accrued"], 2),
-                            round(lia["penalty_accrued"], 2),
-                            round(lia["principal_accrued"], 2),
+                            round(lia["interest_accrued"], precision),
+                            round(lia["penalty_accrued"], precision),
+                            round(lia["principal_accrued"], precision),
                         ],
                     },
                     {
                         "name": "Collected",
                         "values": [
-                            round(stats["interest_recovered"], 2),
-                            round(stats["penalty_recovered"], 2),
-                            round(stats["principal_recovered"], 2),
+                            round(stats["interest_recovered"], precision),
+                            round(stats["penalty_recovered"], precision),
+                            round(stats["principal_recovered"], precision),
                         ],
                     },
                 ],
@@ -1149,7 +1155,7 @@ def get_chart(filters, data):
                 "datasets": [
                     {
                         "name": "Amount Recovered",
-                        "values": [round(daily[d], 2) for d in dates],
+                        "values": [round(daily[d], precision) for d in dates],
                     }
                 ],
             },

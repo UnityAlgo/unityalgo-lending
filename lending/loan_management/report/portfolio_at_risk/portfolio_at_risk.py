@@ -3,7 +3,7 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, today
+from frappe.utils import cint, flt, today
 
 PAR_BUCKETS = [
     ("Current", 0, 4, 0.00),
@@ -353,16 +353,17 @@ def _enrich_loans(loans, loan_names, as_of_date):
 
 
 def _build_rows(enriched):
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
     rows = []
     for loan in sorted(
         enriched, key=lambda x: (x["par_bucket"], x["branch"] or "", x["name"])
     ):
-        op = round(loan["outstanding_principal"], 2)
-        oi = round(loan["outstanding_interest"], 2)
-        ope = round(loan["outstanding_penalty"], 2)
-        tot = round(op + oi + ope, 2)
+        op = round(loan["outstanding_principal"], precision)
+        oi = round(loan["outstanding_interest"], precision)
+        ope = round(loan["outstanding_penalty"], precision)
+        tot = round(op + oi + ope, precision)
         rate = loan["provision_rate_raw"]
-        prov = round(op * rate, 2)
+        prov = round(op * rate, precision)
 
         rows.append(
             {
@@ -372,8 +373,8 @@ def _build_rows(enriched):
                 "loan_officer": loan["loan_officer"] or "",
                 #"loan_type": loan["loan_type"] or "",
                 "disbursement_date": loan["disbursement_date"],
-                "loan_amount": round(flt(loan["loan_amount"]), 2),
-                "disbursed_amount": round(flt(loan["disbursed_amount"]), 2),
+                "loan_amount": round(flt(loan["loan_amount"]), precision),
+                "disbursed_amount": round(flt(loan["disbursed_amount"]), precision),
                 "outstanding_principal": op,
                 "outstanding_interest": oi,
                 "outstanding_penalty": ope,
@@ -391,6 +392,7 @@ def _build_rows(enriched):
 
 
 def _build_summary(enriched):
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
     total_op = sum(e["outstanding_principal"] for e in enriched)
     at_risk_op = sum(
         e["outstanding_principal"] for e in enriched if e["days_past_due"] > 0
@@ -411,13 +413,13 @@ def _build_summary(enriched):
 
     return [
         {
-            "value": round(total_op, 2),
+            "value": round(total_op, precision),
             "label": _("Total Outstanding Principal"),
             "datatype": "Currency",
             "indicator": "blue",
         },
         {
-            "value": round(at_risk_op, 2),
+            "value": round(at_risk_op, precision),
             "label": _("At-Risk Principal ({0}%)").format(par_pct),
             "datatype": "Currency",
             "indicator": "red" if par_pct > 5 else "orange" if par_pct > 2 else "green",
@@ -443,7 +445,7 @@ def _build_summary(enriched):
             else "green",
         },
         {
-            "value": round(total_prov, 2),
+            "value": round(total_prov, precision),
             "label": _("Total Provision Required"),
             "datatype": "Currency",
             "indicator": "orange",
@@ -499,6 +501,7 @@ def _empty_summary():
 
 
 def _build_chart(enriched):
+    precision = cint(frappe.db.get_default("currency_precision")) or 2
     bucket_op = {label: 0.0 for label, *_ in PAR_BUCKETS}
     for e in enriched:
         bucket_op[e["par_bucket"]] = (
@@ -506,7 +509,7 @@ def _build_chart(enriched):
         )
 
     labels = [b[0] for b in PAR_BUCKETS]
-    values = [round(bucket_op.get(l, 0.0), 2) for l in labels]
+    values = [round(bucket_op.get(l, 0.0), precision) for l in labels]
 
     return {
         "data": {

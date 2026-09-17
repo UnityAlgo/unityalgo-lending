@@ -5,7 +5,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt, get_datetime, getdate
+from frappe.utils import cint, flt, get_datetime, getdate
 
 
 class LoanSecurityUnpledge(Document):
@@ -72,6 +72,7 @@ class LoanSecurityUnpledge(Document):
 
 		pending_principal_amount = get_pending_principal_amount(loan_details)
 
+		precision = cint(frappe.db.get_default("currency_precision")) or 2
 		security_value = 0
 		unpledge_qty_map = {}
 		ltv_ratio = 0
@@ -101,16 +102,19 @@ class LoanSecurityUnpledge(Document):
 			current_price = loan_security_price_map.get(security)
 			security_value += qty_after_unpledge * current_price
 
-		if not security_value and flt(pending_principal_amount, 2) > 0:
+		if not security_value and flt(pending_principal_amount, precision) > 0:
 			self._throw(security_value, pending_principal_amount, ltv_ratio)
 
 		if security_value and flt(pending_principal_amount / security_value) * 100 > ltv_ratio:
 			self._throw(security_value, pending_principal_amount, ltv_ratio)
 
 	def _throw(self, security_value, pending_principal_amount, ltv_ratio):
+		precision = cint(frappe.db.get_default("currency_precision")) or 2
 		msg = _("Loan Security Value after unpledge is {0}").format(frappe.bold(security_value))
 		msg += "<br>"
-		msg += _("Pending principal amount is {0}").format(frappe.bold(flt(pending_principal_amount, 2)))
+		msg += _("Pending principal amount is {0}").format(
+			frappe.bold(flt(pending_principal_amount, precision))
+		)
 		msg += "<br>"
 		msg += _("Loan To Security Value ratio must always be {0}").format(frappe.bold(ltv_ratio))
 		frappe.throw(msg, title=_("Loan To Value ratio breach"))

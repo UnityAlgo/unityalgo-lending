@@ -27,20 +27,23 @@ class LoanApplication(Document):
     def set_missing_values(self):
         loan_product = frappe.get_doc("Loan Product", self.loan_product)
 
-        self.loan_amount = loan_product.maximum_loan_amount
-        self.repayment_method = loan_product.repayment_method
-        self.repayment_periods = loan_product.repayment_periods
-        self.repayment_amount = loan_product.repayment_amount
+        if not self.loan_amount:
+            self.loan_amount = loan_product.maximum_loan_amount
+        if not self.repayment_method:
+            self.repayment_method = loan_product.repayment_method
+        if not self.repayment_periods:
+            self.repayment_periods = loan_product.repayment_periods
+        if not self.repayment_amount:
+            self.repayment_amount = loan_product.repayment_amount
 
 
     def on_submit(self):
         self.status = "Approved"
 
     def validate(self):
-        self.set_missing_values()
-
-        # self.set_pledge_amount()
+        self.set_pledge_amount()
         self.set_loan_amount()
+        self.set_missing_values()
         self.validate_loan_amount()
 
         if self.is_term_loan:
@@ -199,6 +202,8 @@ class LoanApplication(Document):
             )
 
     def get_repayment_details(self):
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
+
         if self.is_term_loan:
             if self.repayment_method == "Repay Over Number of Periods":
                 self.repayment_amount = get_monthly_repayment_amount(
@@ -213,7 +218,7 @@ class LoanApplication(Document):
                         frappe.throw(
                             _(
                                 "Repayment Amount must be greater than "
-                                + str(flt(min_repayment_amount, 2))
+                                + str(flt(min_repayment_amount, precision))
                             )
                         )
                     self.repayment_periods = math.ceil(
@@ -236,7 +241,8 @@ class LoanApplication(Document):
 
         if not self.rate_of_interest:
             frappe.throw("Rate interest cannot be 0")
-            
+
+        precision = cint(frappe.db.get_default("currency_precision")) or 2
         balance_amount = self.loan_amount
         self.total_payable_amount = 0
         self.total_payable_interest = 0
@@ -247,7 +253,7 @@ class LoanApplication(Document):
             balance_amount = balance_amount + interest_amount - self.repayment_amount
             total_payable_interest += interest_amount
 
-        self.total_payable_interest = flt(total_payable_interest, 2)
+        self.total_payable_interest = flt(total_payable_interest, precision)
         self.total_payable_amount = self.loan_amount + self.total_payable_interest
 
     def set_loan_amount(self):

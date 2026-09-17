@@ -273,6 +273,11 @@ def get_monthly_repayment_amount(loan_amount, rate_of_interest, repayment_period
     This formula assumes monthly compounding consistent with APR calculations.
     The result matches standard APR calculators (e.g., calculator.net/apr-calculator).
     """
+    if not repayment_periods:
+        frappe.throw(
+            _("Repayment Periods must be greater than zero for repayment method 'Repay Over Number of Periods'")
+        )
+
     precision = cint(frappe.db.get_default("currency_precision")) or 2
 
     if rate_of_interest:
@@ -285,7 +290,7 @@ def get_monthly_repayment_amount(loan_amount, rate_of_interest, repayment_period
                 * (1 + monthly_interest_rate) ** repayment_periods
             )
             / ((1 + monthly_interest_rate) ** repayment_periods - 1),
-            2,
+            precision,
         )
     else:
         monthly_repayment_amount = flt(flt(loan_amount) / repayment_periods, precision)
